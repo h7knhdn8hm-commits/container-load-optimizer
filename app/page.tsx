@@ -9,6 +9,8 @@ type Item = {
   qty: number; l: number; w: number; h: number; weight: number;
   cartonsPerPallet: number; cartonsPerLayer: number; layers: number;
   palletL: number; palletW: number; palletH: number; palletBaseH?: number;
+  palletBaseWeight?: number; supplierItemNumber?: string; supplierDescription?: string;
+  loadingPriority?: number; remarks?: string; canMixSkusOnPallet?: boolean;
   stackable?: boolean; maxStackLayers?: number; maxStackWeightKg?: number;
   cartonRotatable?: boolean; mustStayUpright?: boolean; estimated?: boolean;
 };
@@ -52,7 +54,7 @@ function pack(items: Item[], c: typeof containers["40HC"], cartonScale = 1) {
     let nx=x,ny=y,nz=z,nRow=rowDepth,nLayer=layerHeight;
     if(nx+L>c.l){nx=0;ny+=nRow;nRow=0}
     if(ny+W>c.w){ny=0;nx=0;nz+=nLayer;nRow=0;nLayer=0}
-    const actualUnits=Math.min(unitSize,item.qty-q.used),kg=actualUnits*item.weight;
+    const actualUnits=Math.min(unitSize,item.qty-q.used),kg=actualUnits*item.weight+(pallet?(item.palletBaseWeight||0):0);
     const palletTier=pallet?Math.floor(nz/Math.max(1,H))+1:1;
     const tierBlocked=pallet&&((!item.stackable&&nz>0)||Boolean(item.maxStackLayers&&palletTier>item.maxStackLayers));
     if(nz+H>c.h||totalKg+kg>c.maxKg||tierBlocked){q.blocked=true;continue}
@@ -79,7 +81,7 @@ function singleCapacity(item: Item, c: typeof containers["40HC"], palletized: bo
   let geometric=0;
   for(const [l,w,h] of options) geometric=Math.max(geometric,Math.floor(c.l/l)*Math.floor(c.w/w)*(palletized?palletTiers:Math.floor(c.h/h)));
   const units=palletized?item.cartonsPerPallet:1;
-  const byWeight=Math.floor(c.maxKg/(item.weight*units));
+  const byWeight=Math.floor(c.maxKg/(item.weight*units+(palletized?(item.palletBaseWeight||0):0)));
   const maxLoads=Math.min(geometric,byWeight);
   return {maximum:maxLoads*units,recommended:Math.floor(maxLoads*.94)*units,loads:maxLoads,weightLimited:byWeight<geometric};
 }
@@ -106,16 +108,70 @@ function rowsToItems(rows: Record<string,unknown>[]) {
   const optionalNumber=(v:unknown)=>v===null||v===undefined||v===""?undefined:Number(v)||undefined;
   const yes=(v:unknown,f=false)=>v===null||v===undefined||v===""?f:/^(y|yes|true|1|כן)$/i.test(String(v).trim());
   const supplierName=(v:unknown)=>String(v||"ספק לא מוגדר").replace("LI}TON","LIPTON");
-  return rows.slice(0,1000).map((r,idx):Item=>({
-    id:String(r.ItemNumber||`ITEM-${idx+1}`),description:String(r.ItemDescription||r.ENG||"פריט ללא תיאור"),supplier:supplierName(r.Supplier),
-    loadType:String(r.LoadType).toLowerCase().includes("pallet")?"Palletized":"Loose",qty:n(r.Quantity,n(r.CartonsPerPallet,60)*8),
-    l:n(r.CartonLengthCm,40),w:n(r.CartonWidthCm,30),h:n(r.CartonHeightCm,25),weight:n(r.CartonWeightKg,5),cartonsPerPallet:n(r.CartonsPerPallet,60),
-    cartonsPerLayer:n(r.CartonsPerLayer,10),layers:n(r.LayersPerPallet,6),palletL:n(r.PalletLengthCm,120),palletW:n(r.PalletWidthCm,100),
-    palletH:n(r.LoadedPalletHeightCm,Math.min(220,n(r.CartonHeightCm,25)*n(r.LayersPerPallet,6)+n(r.PalletHeightCm,15))),palletBaseH:n(r.PalletHeightCm,15),
-    stackable:yes(r.Stackable,false),maxStackLayers:optionalNumber(r.MaxStackLayers),maxStackWeightKg:optionalNumber(r.MaxStackWeightKg),
-    cartonRotatable:yes(r.CartonRotatable,true),mustStayUpright:yes(r.MustStayUpright,true),
-    estimated:![r.CartonLengthCm,r.CartonWidthCm,r.CartonHeightCm,r.PalletLengthCm,r.PalletWidthCm,r.LoadedPalletHeightCm].every(Boolean)
-  }));
+  const value=(r:Record<string,unknown>,...keys:string[])=>{
+    for(const key of keys){
+      const candidate=r[key];
+      if(candidate!==null&&candidate!==undefined&&String(candidate).trim()!=="")return candidate;
+    }
+    return undefined;
+  };
+  let lastSupplier="ספק לא מוגדר";
+  return rows.slice(0,1000).reduce<Item[]>((items,r,idx)=>{
+    if(/^ex\.?$/i.test(String(value(r,"No.","No")||"").trim()))return items;
+    const itemNumber=value(r,"ItemNumber","Item Number");
+    if(itemNumber===undefined)return items;
+    const supplierValue=value(r,"Supplier","ספק");
+    if(supplierValue!==undefined)lastSupplier=supplierName(supplierValue);
+    const cartonLength=value(r,"CartonLengthCm","Carton Length (cm)","Carton Length\n(cm)");
+    const cartonWidth=value(r,"CartonWidthCm","Carton Width (cm)","Carton Width\n(cm)");
+    const cartonHeight=value(r,"CartonHeightCm","Carton Height (cm)","Carton Height\n(cm)");
+    const cartonWeight=value(r,"CartonWeightKg","Carton Weight (kg)","Carton Weight\n(kg)");
+    const cartonsPerPallet=value(r,"CartonsPerPallet","Cartons Per Pallet","Cartons\nPer Pallet");
+    const cartonsPerLayer=value(r,"CartonsPerLayer","Cartons Per Layer","Cartons\nPer Layer");
+    const layersPerPallet=value(r,"LayersPerPallet","Layers Per Pallet","Layers\nPer Pallet");
+    const palletLength=value(r,"PalletLengthCm","Pallet Length (cm)","Pallet Length\n(cm)");
+    const palletWidth=value(r,"PalletWidthCm","Pallet Width (cm)","Pallet Width\n(cm)");
+    const palletBaseHeight=value(r,"PalletHeightCm","Pallet Height empty (cm)","Pallet Height\nempty (cm)");
+    const loadedPalletHeight=value(r,"LoadedPalletHeightCm","Loaded Pallet Height (cm)","Loaded Pallet\nHeight (cm)");
+    const item:Item={
+      id:String(itemNumber||`ITEM-${idx+1}`),
+      description:String(value(r,"ItemDescription","Item Description","ENG","Supplier's Item description")||"פריט ללא תיאור"),
+      supplier:lastSupplier,
+      supplierItemNumber:value(r,"SupplierItemNumber","Supplier's Item number")===undefined?undefined:String(value(r,"SupplierItemNumber","Supplier's Item number")),
+      supplierDescription:value(r,"SupplierDescription","Supplier's Item description")===undefined?undefined:String(value(r,"SupplierDescription","Supplier's Item description")),
+      loadType:String(value(r,"LoadType","Load Type")||"").toLowerCase().includes("pallet")?"Palletized":"Loose",
+      qty:n(value(r,"Quantity"),n(cartonsPerPallet,60)*8),
+      l:n(cartonLength,40),w:n(cartonWidth,30),h:n(cartonHeight,25),weight:n(cartonWeight,5),
+      cartonsPerPallet:n(cartonsPerPallet,60),cartonsPerLayer:n(cartonsPerLayer,10),layers:n(layersPerPallet,6),
+      palletL:n(palletLength,120),palletW:n(palletWidth,100),
+      palletH:n(loadedPalletHeight,Math.min(220,n(cartonHeight,25)*n(layersPerPallet,6)+n(palletBaseHeight,15))),
+      palletBaseH:n(palletBaseHeight,15),
+      palletBaseWeight:optionalNumber(value(r,"Pallet Weight empty (kg)","Pallet Weight\nempty (kg)")),
+      stackable:yes(value(r,"Stackable","Stackable?"),false),
+      maxStackLayers:optionalNumber(value(r,"MaxStackLayers","Max Stack Layers","Max Stack\nLayers")),
+      maxStackWeightKg:optionalNumber(value(r,"MaxStackWeightKg","Max Stack Weight (kg)","Max Stack\nWeight (kg)")),
+      cartonRotatable:yes(value(r,"CartonRotatable","Carton Rotatable?","Carton\nRotatable?"),true),
+      mustStayUpright:yes(value(r,"MustStayUpright","Must Stay Upright?","Must Stay\nUpright?"),true),
+      canMixSkusOnPallet:yes(value(r,"CanMixSKUsOnPallet","Can Mix SKUs On Pallet?"),false),
+      loadingPriority:optionalNumber(value(r,"LoadingPriority","Loading Priority","Loading\nPriority")),
+      remarks:value(r,"Remarks","Notes / Comments","Notes /\nComments")===undefined?undefined:String(value(r,"Remarks","Notes / Comments","Notes /\nComments")),
+      estimated:![cartonLength,cartonWidth,cartonHeight,palletLength,palletWidth,loadedPalletHeight].every(v=>v!==undefined&&v!==null&&v!=="")
+    };
+    items.push(item);
+    return items;
+  },[]);
+}
+
+function worksheetToItems(XLSX:typeof import("xlsx"),sheet:import("xlsx").WorkSheet){
+  const matrix=XLSX.utils.sheet_to_json<unknown[]>(sheet,{header:1,defval:null,raw:true});
+  const clean=(v:unknown)=>String(v??"").replace(/\s+/g," ").trim().toLowerCase();
+  const headerIndex=matrix.findIndex((row,index)=>index<10&&row.some(v=>clean(v)==="item number")&&row.some(v=>clean(v)==="load type"));
+  if(headerIndex<0)return rowsToItems(XLSX.utils.sheet_to_json<Record<string,unknown>>(sheet));
+  const headers=matrix[headerIndex].map(v=>String(v??"").trim());
+  const records=matrix.slice(headerIndex+1)
+    .filter(row=>!/^ex\.?$/i.test(String(row[0]??"").trim()))
+    .map(row=>Object.fromEntries(headers.map((header,index)=>[header,row[index]]))) as Record<string,unknown>[];
+  return rowsToItems(records);
 }
 
 function applyPalletPreset(item:Item,preset:PalletPreset){
@@ -155,7 +211,7 @@ function ContainerCanvas({result, mode, container, colorById}:{result:ReturnType
 }
 
 export default function Home(){
-  const [items,setItems]=useState<Item[]>(demoItems);const [selected,setSelected]=useState<string[]>(demoItems.map(x=>x.id));const [containerType,setContainerType]=useState<keyof typeof containers>("40HC");const [supplier,setSupplier]=useState("הכול");const [tab,setTab]=useState<"2d"|"3d">("3d");const [fileName,setFileName]=useState("LOADING DEMO.xlsx");const [workMode,setWorkMode]=useState<"single"|"mixed">("single");const [simulationMode,setSimulationMode]=useState<"database"|"palletized"|"loose">("database");const [palletPreset,setPalletPreset]=useState<PalletPreset>("database");const [heightOptimization,setHeightOptimization]=useState(false);const [focusId,setFocusId]=useState(demoItems[0].id);
+  const [items,setItems]=useState<Item[]>(demoItems);const [selected,setSelected]=useState<string[]>(demoItems.map(x=>x.id));const [containerType,setContainerType]=useState<keyof typeof containers>("40HC");const [supplier,setSupplier]=useState("הכול");const [tab,setTab]=useState<"2d"|"3d">("3d");const [fileName,setFileName]=useState("LOADING_METHOD.xlsx");const [workMode,setWorkMode]=useState<"single"|"mixed">("single");const [simulationMode,setSimulationMode]=useState<"database"|"palletized"|"loose">("database");const [palletPreset,setPalletPreset]=useState<PalletPreset>("database");const [heightOptimization,setHeightOptimization]=useState(false);const [focusId,setFocusId]=useState(demoItems[0].id);
   const c=containers[containerType];
   const visible=useMemo(()=>items.filter(i=>(supplier==="הכול"||i.supplier===supplier)&&selected.includes(i.id)),[items,supplier,selected]);
   const simulationItems=useMemo(()=>visible.map(item=>{const withMode=simulationMode==="database"?item:{...item,loadType:simulationMode==="palletized"?"Palletized" as LoadType:"Loose" as LoadType};const prepared=withMode.loadType==="Palletized"?applyPalletPreset(withMode,palletPreset):withMode;return heightOptimization?optimizePalletHeightForExtraTier(prepared,c):prepared}),[visible,simulationMode,palletPreset,heightOptimization,c]);
@@ -195,7 +251,7 @@ export default function Home(){
   const cbmDemandPct=containerCbm?plannedPhysicalCbm/containerCbm*100:0;
   const netCargoPct=containerCbm?netCargoCbm/containerCbm*100:0;
   const palletizedCbmPct=containerCbm?palletizedPhysicalCbm/containerCbm*100:0;
-  const plannedWeightKg=visible.reduce((sum,item)=>sum+item.qty*item.weight,0);
+  const plannedWeightKg=visible.reduce((sum,item)=>sum+item.qty*item.weight+(item.loadType==="Palletized"?Math.ceil(item.qty/Math.max(1,item.cartonsPerPallet))*(item.palletBaseWeight||0):0),0);
   const weightDemandPct=c.maxKg?plannedWeightKg/c.maxKg*100:0;
   const scenarioVolumeLabel=simulationMode==="loose"?"נפח קרטונים ללא משטחים":simulationMode==="palletized"?"נפח כולל משטחים":"נפח לפי שיטת ההעמסה מהקובץ";
   const palletPresetLabel=palletPreset==="database"?"לפי נתוני הפריטים":palletPreset==="euro"?"Euro 120×80":palletPreset==="gma"?"GMA 122×102":"ISO 120×100";
@@ -207,9 +263,9 @@ export default function Home(){
   const singleMixItem=visible.length===1?palletizedItems[0]:null;
   const looseVsPalletRatio=palletScenario.loaded?looseScenario.loaded/palletScenario.loaded:0;
   const suppliers=["הכול",...Array.from(new Set(items.map(i=>i.supplier)))];
-  useEffect(()=>{let active=true;(async()=>{const saved=localStorage.getItem("container-suppliers-v4");if(saved){try{const parsed=(JSON.parse(saved) as Item[]).map(item=>({...item,supplier:item.supplier==="LI}TON"?"LIPTON":item.supplier}));if(Array.isArray(parsed)&&parsed.length){setItems(parsed);setSelected(parsed.slice(0,7).map((x:Item)=>x.id));setFocusId(parsed[0].id);return}}catch{}}try{const XLSX=await import("xlsx");const response=await fetch("assets/loading-demo.xlsx");const wb=XLSX.read(await response.arrayBuffer());const parsed=rowsToItems(XLSX.utils.sheet_to_json<Record<string,unknown>>(wb.Sheets[wb.SheetNames[0]]));if(active&&parsed.length){setItems(parsed);setSelected(parsed.slice(0,7).map(x=>x.id));setFocusId(parsed[0].id);localStorage.setItem("container-suppliers-v4",JSON.stringify(parsed))}}catch{}})();return()=>{active=false}},[]);
-  useEffect(()=>localStorage.setItem("container-suppliers-v4",JSON.stringify(items)),[items]);
-  const importFile=async(e:ChangeEvent<HTMLInputElement>)=>{const file=e.target.files?.[0];if(!file)return;setFileName(file.name);const XLSX=await import("xlsx");const wb=XLSX.read(await file.arrayBuffer());const mapped=rowsToItems(XLSX.utils.sheet_to_json<Record<string,unknown>>(wb.Sheets[wb.SheetNames[0]]));if(mapped.length){setItems(mapped);setSelected(mapped.slice(0,7).map(x=>x.id));setSupplier("הכול");setFocusId(mapped[0].id);localStorage.setItem("container-suppliers-v4",JSON.stringify(mapped))}};
+  useEffect(()=>{let active=true;(async()=>{const saved=localStorage.getItem("container-suppliers-v5");if(saved){try{const parsed=(JSON.parse(saved) as Item[]).map(item=>({...item,supplier:item.supplier==="LI}TON"?"LIPTON":item.supplier}));if(Array.isArray(parsed)&&parsed.length){setItems(parsed);setSelected(parsed.slice(0,7).map((x:Item)=>x.id));setFocusId(parsed[0].id);return}}catch{}}try{const XLSX=await import("xlsx");const response=await fetch("assets/loading-demo.xlsx");const wb=XLSX.read(await response.arrayBuffer());const parsed=worksheetToItems(XLSX,wb.Sheets[wb.SheetNames[0]]);if(active&&parsed.length){setItems(parsed);setSelected(parsed.slice(0,7).map(x=>x.id));setFocusId(parsed[0].id);localStorage.setItem("container-suppliers-v5",JSON.stringify(parsed))}}catch{}})();return()=>{active=false}},[]);
+  useEffect(()=>localStorage.setItem("container-suppliers-v5",JSON.stringify(items)),[items]);
+  const importFile=async(e:ChangeEvent<HTMLInputElement>)=>{const file=e.target.files?.[0];if(!file)return;setFileName(file.name);const XLSX=await import("xlsx");const wb=XLSX.read(await file.arrayBuffer());const mapped=worksheetToItems(XLSX,wb.Sheets[wb.SheetNames[0]]);if(mapped.length){setItems(mapped);setSelected(mapped.slice(0,7).map(x=>x.id));setSupplier("הכול");setFocusId(mapped[0].id);localStorage.setItem("container-suppliers-v5",JSON.stringify(mapped))}};
   const changeSupplier=(value:string)=>{setSupplier(value);const pool=value==="הכול"?items:items.filter(i=>i.supplier===value);if(pool.length){setFocusId(pool[0].id);setSelected(pool.slice(0,7).map(i=>i.id))}};
   const updateQty=(id:string,qty:number)=>setItems(v=>v.map(x=>x.id===id?{...x,qty:Math.max(0,qty)}:x));
   const focus=items.find(x=>x.id===focusId)||items[0];
