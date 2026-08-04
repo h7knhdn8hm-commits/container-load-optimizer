@@ -4,6 +4,7 @@ import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type LoadType = "Palletized" | "Loose";
 type PalletPreset = "database" | "euro" | "industrial" | "gma";
+type ImportStatus = { kind: "idle" | "loading" | "success" | "error"; message: string };
 type Item = {
   id: string; description: string; supplier: string; loadType: LoadType;
   qty: number; l: number; w: number; h: number; weight: number;
@@ -103,14 +104,45 @@ function shadeColor(hex:string,factor:number){
   return `rgb(${channel(16)},${channel(8)},${channel(0)})`;
 }
 
+function normalizeHeader(v:unknown){
+  return String(v??"")
+    .normalize("NFKD")
+    .toLowerCase()
+    .replace(/[\u2018\u2019'`]/g,"")
+    .replace(/[^a-z0-9\u0590-\u05ff]+/g," ")
+    .replace(/\s+/g," ")
+    .trim();
+}
+
+function parseNumber(v:unknown){
+  if(typeof v==="number")return Number.isFinite(v)?v:undefined;
+  let text=String(v??"").trim().replace(/\s+/g,"");
+  if(!text)return undefined;
+  text=text.replace(/\.,/g,".").replace(/,\./g,".");
+  if(text.includes(",")&&!text.includes(".")){
+    text=/^-?\d{1,3}(,\d{3})+$/.test(text)?text.replace(/,/g,""):text.replace(/,/g,".");
+  }else if(text.includes(",")&&text.includes(".")){
+    text=text.replace(/,/g,"");
+  }
+  const parsed=Number(text);
+  return Number.isFinite(parsed)?parsed:undefined;
+}
+
 function rowsToItems(rows: Record<string,unknown>[]) {
-  const n=(v:unknown,f:number)=>Number(v)||f;
-  const optionalNumber=(v:unknown)=>v===null||v===undefined||v===""?undefined:Number(v)||undefined;
+  const n=(v:unknown,f:number)=>parseNumber(v)??f;
+  const optionalNumber=(v:unknown)=>parseNumber(v);
   const yes=(v:unknown,f=false)=>v===null||v===undefined||v===""?f:/^(y|yes|true|1|כן)$/i.test(String(v).trim());
   const supplierName=(v:unknown)=>String(v||"ספק לא מוגדר").replace("LI}TON","LIPTON");
   const value=(r:Record<string,unknown>,...keys:string[])=>{
+    const normalized=new Map<string,unknown>();
+    Object.entries(r).forEach(([header,candidate])=>{
+      const key=normalizeHeader(header);
+      if(!key)return;
+      const current=normalized.get(key);
+      if(current===undefined||current===null||String(current).trim()==="")normalized.set(key,candidate);
+    });
     for(const key of keys){
-      const candidate=r[key];
+      const candidate=normalized.get(normalizeHeader(key));
       if(candidate!==null&&candidate!==undefined&&String(candidate).trim()!=="")return candidate;
     }
     return undefined;
@@ -118,9 +150,9 @@ function rowsToItems(rows: Record<string,unknown>[]) {
   let lastSupplier="ספק לא מוגדר";
   return rows.slice(0,1000).reduce<Item[]>((items,r,idx)=>{
     if(/^ex\.?$/i.test(String(value(r,"No.","No")||"").trim()))return items;
-    const itemNumber=value(r,"ItemNumber","Item Number");
+    const itemNumber=value(r,"ItemNumber","Item Number","Item No","SKU","מק״ט");
     if(itemNumber===undefined)return items;
-    const supplierValue=value(r,"Supplier","ספק");
+    const supplierValue=value(r,"Supplier","Suplier","Suppllier","Supllier","ספק");
     if(supplierValue!==undefined)lastSupplier=supplierName(supplierValue);
     const cartonLength=value(r,"CartonLengthCm","Carton Length (cm)","Carton Length\n(cm)");
     const cartonWidth=value(r,"CartonWidthCm","Carton Width (cm)","Carton Width\n(cm)");
@@ -134,11 +166,11 @@ function rowsToItems(rows: Record<string,unknown>[]) {
     const palletBaseHeight=value(r,"PalletHeightCm","Pallet Height empty (cm)","Pallet Height\nempty (cm)");
     const loadedPalletHeight=value(r,"LoadedPalletHeightCm","Loaded Pallet Height (cm)","Loaded Pallet\nHeight (cm)");
     const item:Item={
-      id:String(itemNumber||`ITEM-${idx+1}`),
-      description:String(value(r,"ItemDescription","Item Description","ENG","Supplier's Item description")||"פריט ללא תיאור"),
+      id:String(itemNumber||`ITEM-${idx+1}`).trim(),
+      description:String(value(r,"ItemDescription","Item Description","ENG","Supplier's Item description","Suppllier's Item description")||"פריט ללא תיאור"),
       supplier:lastSupplier,
-      supplierItemNumber:value(r,"SupplierItemNumber","Supplier's Item number")===undefined?undefined:String(value(r,"SupplierItemNumber","Supplier's Item number")),
-      supplierDescription:value(r,"SupplierDescription","Supplier's Item description")===undefined?undefined:String(value(r,"SupplierDescription","Supplier's Item description")),
+      supplierItemNumber:value(r,"SupplierItemNumber","Supplier's Item number","Suppllier's Item number","Suplier's Item number")===undefined?undefined:String(value(r,"SupplierItemNumber","Supplier's Item number","Suppllier's Item number","Suplier's Item number")),
+      supplierDescription:value(r,"SupplierDescription","Supplier's Item description","Suppllier's Item description","Suplier's Item description")===undefined?undefined:String(value(r,"SupplierDescription","Supplier's Item description","Suppllier's Item description","Suplier's Item description")),
       loadType:String(value(r,"LoadType","Load Type")||"").toLowerCase().includes("pallet")?"Palletized":"Loose",
       qty:n(value(r,"Quantity"),n(cartonsPerPallet,60)*8),
       l:n(cartonLength,40),w:n(cartonWidth,30),h:n(cartonHeight,25),weight:n(cartonWeight,5),
@@ -164,14 +196,25 @@ function rowsToItems(rows: Record<string,unknown>[]) {
 
 function worksheetToItems(XLSX:typeof import("xlsx"),sheet:import("xlsx").WorkSheet){
   const matrix=XLSX.utils.sheet_to_json<unknown[]>(sheet,{header:1,defval:null,raw:true});
-  const clean=(v:unknown)=>String(v??"").replace(/\s+/g," ").trim().toLowerCase();
-  const headerIndex=matrix.findIndex((row,index)=>index<10&&row.some(v=>clean(v)==="item number")&&row.some(v=>clean(v)==="load type"));
+  const headerIndex=matrix.findIndex((row,index)=>{
+    if(index>=10)return false;
+    const headers=row.map(normalizeHeader);
+    return headers.some(v=>["item number","itemnumber","item no","sku","מקט"].includes(v))&&headers.some(v=>["load type","loadtype"].includes(v));
+  });
   if(headerIndex<0)return rowsToItems(XLSX.utils.sheet_to_json<Record<string,unknown>>(sheet));
   const headers=matrix[headerIndex].map(v=>String(v??"").trim());
   const records=matrix.slice(headerIndex+1)
     .filter(row=>!/^ex\.?$/i.test(String(row[0]??"").trim()))
-    .map(row=>Object.fromEntries(headers.map((header,index)=>[header,row[index]]))) as Record<string,unknown>[];
+    .map(row=>Object.fromEntries(headers.flatMap((header,index)=>header?[[header,row[index]]]:[]))) as Record<string,unknown>[];
   return rowsToItems(records);
+}
+
+function workbookToItems(XLSX:typeof import("xlsx"),workbook:import("xlsx").WorkBook){
+  for(const sheetName of workbook.SheetNames){
+    const mapped=worksheetToItems(XLSX,workbook.Sheets[sheetName]);
+    if(mapped.length)return Array.from(new Map(mapped.map(item=>[item.id,item])).values());
+  }
+  return [];
 }
 
 function applyPalletPreset(item:Item,preset:PalletPreset){
@@ -211,7 +254,7 @@ function ContainerCanvas({result, mode, container, colorById}:{result:ReturnType
 }
 
 export default function Home(){
-  const [items,setItems]=useState<Item[]>(demoItems);const [selected,setSelected]=useState<string[]>(demoItems.map(x=>x.id));const [containerType,setContainerType]=useState<keyof typeof containers>("40HC");const [supplier,setSupplier]=useState("הכול");const [tab,setTab]=useState<"2d"|"3d">("3d");const [fileName,setFileName]=useState("LOADING_METHOD.xlsx");const [workMode,setWorkMode]=useState<"single"|"mixed">("single");const [simulationMode,setSimulationMode]=useState<"database"|"palletized"|"loose">("database");const [palletPreset,setPalletPreset]=useState<PalletPreset>("database");const [heightOptimization,setHeightOptimization]=useState(false);const [focusId,setFocusId]=useState(demoItems[0].id);
+  const [items,setItems]=useState<Item[]>(demoItems);const [selected,setSelected]=useState<string[]>(demoItems.map(x=>x.id));const [containerType,setContainerType]=useState<keyof typeof containers>("40HC");const [supplier,setSupplier]=useState("הכול");const [tab,setTab]=useState<"2d"|"3d">("3d");const [fileName,setFileName]=useState("LOADING_METHOD.xlsx");const [importStatus,setImportStatus]=useState<ImportStatus>({kind:"idle",message:""});const [hydrated,setHydrated]=useState(false);const userImportRef=useRef(false);const [workMode,setWorkMode]=useState<"single"|"mixed">("single");const [simulationMode,setSimulationMode]=useState<"database"|"palletized"|"loose">("database");const [palletPreset,setPalletPreset]=useState<PalletPreset>("database");const [heightOptimization,setHeightOptimization]=useState(false);const [focusId,setFocusId]=useState(demoItems[0].id);
   const c=containers[containerType];
   const visible=useMemo(()=>items.filter(i=>(supplier==="הכול"||i.supplier===supplier)&&selected.includes(i.id)),[items,supplier,selected]);
   const simulationItems=useMemo(()=>visible.map(item=>{const withMode=simulationMode==="database"?item:{...item,loadType:simulationMode==="palletized"?"Palletized" as LoadType:"Loose" as LoadType};const prepared=withMode.loadType==="Palletized"?applyPalletPreset(withMode,palletPreset):withMode;return heightOptimization?optimizePalletHeightForExtraTier(prepared,c):prepared}),[visible,simulationMode,palletPreset,heightOptimization,c]);
@@ -263,9 +306,25 @@ export default function Home(){
   const singleMixItem=visible.length===1?palletizedItems[0]:null;
   const looseVsPalletRatio=palletScenario.loaded?looseScenario.loaded/palletScenario.loaded:0;
   const suppliers=["הכול",...Array.from(new Set(items.map(i=>i.supplier)))];
-  useEffect(()=>{let active=true;(async()=>{const saved=localStorage.getItem("container-suppliers-v5");if(saved){try{const parsed=(JSON.parse(saved) as Item[]).map(item=>({...item,supplier:item.supplier==="LI}TON"?"LIPTON":item.supplier}));if(Array.isArray(parsed)&&parsed.length){setItems(parsed);setSelected(parsed.slice(0,7).map((x:Item)=>x.id));setFocusId(parsed[0].id);return}}catch{}}try{const XLSX=await import("xlsx");const response=await fetch("assets/loading-demo.xlsx");const wb=XLSX.read(await response.arrayBuffer());const parsed=worksheetToItems(XLSX,wb.Sheets[wb.SheetNames[0]]);if(active&&parsed.length){setItems(parsed);setSelected(parsed.slice(0,7).map(x=>x.id));setFocusId(parsed[0].id);localStorage.setItem("container-suppliers-v5",JSON.stringify(parsed))}}catch{}})();return()=>{active=false}},[]);
-  useEffect(()=>localStorage.setItem("container-suppliers-v5",JSON.stringify(items)),[items]);
-  const importFile=async(e:ChangeEvent<HTMLInputElement>)=>{const file=e.target.files?.[0];if(!file)return;setFileName(file.name);const XLSX=await import("xlsx");const wb=XLSX.read(await file.arrayBuffer());const mapped=worksheetToItems(XLSX,wb.Sheets[wb.SheetNames[0]]);if(mapped.length){setItems(mapped);setSelected(mapped.slice(0,7).map(x=>x.id));setSupplier("הכול");setFocusId(mapped[0].id);localStorage.setItem("container-suppliers-v5",JSON.stringify(mapped))}};
+  useEffect(()=>{let active=true;(async()=>{const saved=localStorage.getItem("container-suppliers-v5");if(saved){try{const parsed=(JSON.parse(saved) as Item[]).map(item=>({...item,supplier:item.supplier==="LI}TON"?"LIPTON":item.supplier}));if(Array.isArray(parsed)&&parsed.length&&active&&!userImportRef.current){const savedFileName=localStorage.getItem("container-file-name-v1")||"הקובץ השמור";setItems(parsed);setSelected(parsed.slice(0,7).map((x:Item)=>x.id));setFocusId(parsed[0].id);setFileName(savedFileName);setImportStatus({kind:"success",message:`שמורים ${parsed.length} מק״טים`});setHydrated(true);return}}catch{}}try{const XLSX=await import("xlsx");const response=await fetch("assets/loading-demo.xlsx");const wb=XLSX.read(await response.arrayBuffer());const parsed=workbookToItems(XLSX,wb);if(active&&!userImportRef.current&&parsed.length){setItems(parsed);setSelected(parsed.slice(0,7).map(x=>x.id));setFocusId(parsed[0].id);setHydrated(true);localStorage.setItem("container-suppliers-v5",JSON.stringify(parsed))}}catch{if(active&&!userImportRef.current)setHydrated(true)}})();return()=>{active=false}},[]);
+  useEffect(()=>{if(hydrated)localStorage.setItem("container-suppliers-v5",JSON.stringify(items))},[items,hydrated]);
+  const importFile=async(e:ChangeEvent<HTMLInputElement>)=>{
+    const input=e.currentTarget,file=input.files?.[0];if(!file)return;
+    userImportRef.current=true;setImportStatus({kind:"loading",message:"קוראת את הקובץ…"});
+    try{
+      const XLSX=await import("xlsx");
+      const wb=XLSX.read(await file.arrayBuffer());
+      const mapped=workbookToItems(XLSX,wb);
+      if(!mapped.length)throw new Error("לא נמצאו שורות פריטים בפורמט הנתמך");
+      const supplierNames=Array.from(new Set(mapped.map(item=>item.supplier))).filter(name=>name!=="ספק לא מוגדר");
+      setItems(mapped);setSelected(mapped.slice(0,7).map(x=>x.id));setSupplier("הכול");setFocusId(mapped[0].id);setFileName(file.name);setHydrated(true);
+      localStorage.setItem("container-suppliers-v5",JSON.stringify(mapped));localStorage.setItem("container-file-name-v1",file.name);
+      setImportStatus({kind:"success",message:`נקלטו ${mapped.length} מק״טים${supplierNames.length?` · ${supplierNames.join(", ")}`:""}`});
+    }catch(error){
+      const message=error instanceof Error?error.message:"לא ניתן לקרוא את הקובץ";
+      setImportStatus({kind:"error",message:`הקובץ לא נקלט: ${message}`});
+    }finally{input.value=""}
+  };
   const changeSupplier=(value:string)=>{setSupplier(value);const pool=value==="הכול"?items:items.filter(i=>i.supplier===value);if(pool.length){setFocusId(pool[0].id);setSelected(pool.slice(0,7).map(i=>i.id))}};
   const updateQty=(id:string,qty:number)=>setItems(v=>v.map(x=>x.id===id?{...x,qty:Math.max(0,qty)}:x));
   const focus=items.find(x=>x.id===focusId)||items[0];
@@ -281,7 +340,7 @@ export default function Home(){
     return map;
   },[items]);
   return <main dir="rtl">
-    <header className="topbar"><div className="brand"><img src="assets/ls-logo.png" alt="ליימן שליסל"/><div><div className="eyebrow">LOADWISE · כלי תכנון יבוא</div><h1>מקסום העמסת מכולות</h1></div></div><label className="upload"><span>＋</span><span><b>ייבוא Excel / CSV</b><small>{fileName}</small></span><input type="file" accept=".xlsx,.xls,.csv" onChange={importFile}/></label></header>
+    <header className="topbar"><div className="brand"><img src="assets/ls-logo.png" alt="ליימן שליסל"/><div><div className="eyebrow">LOADWISE · כלי תכנון יבוא</div><h1>מקסום העמסת מכולות</h1></div></div><label className="upload"><span>＋</span><span><b>ייבוא Excel / CSV</b><small>{fileName}</small>{importStatus.kind!=="idle"&&<em className={`import-status ${importStatus.kind}`} role="status">{importStatus.message}</em>}</span><input type="file" accept=".xlsx,.xls,.csv" onChange={importFile}/></label></header>
     <nav className="mode-switch"><button className={workMode==="single"?"active":""} onClick={()=>setWorkMode("single")}><b>יכולת העמסה לפריט</b><small>מקסימום ומומלץ לכל מק״ט</small></button><button className={workMode==="mixed"?"active":""} onClick={()=>setWorkMode("mixed")}><b>העמסה מעורבת</b><small>בניית הזמנה ממספר פריטים</small></button></nav>
     <section className="controls card"><label>ספק<select value={supplier} onChange={e=>changeSupplier(e.target.value)}>{suppliers.map(s=><option key={s}>{s}</option>)}</select></label><label>מכולה לסימולציה<select value={containerType} onChange={e=>setContainerType(e.target.value as keyof typeof containers)}>{Object.keys(containers).map(s=><option key={s} value={s}>{s==="40RF"?"40RF · Reefer":s}</option>)}</select></label>{workMode==="mixed"&&<label>איך להעמיס בסימולציה<select value={simulationMode} onChange={e=>setSimulationMode(e.target.value as "database"|"palletized"|"loose")}><option value="database">כמו שמוגדר בקובץ לכל פריט</option><option value="palletized">הכול על משטחים</option><option value="loose">הכול ללא משטחים · Loose</option></select></label>}{workMode==="mixed"&&<label>סוג משטח להשוואה<select value={palletPreset} onChange={e=>setPalletPreset(e.target.value as PalletPreset)}><option value="database">המידות שמופיעות בקובץ</option><option value="euro">Euro · 120×80</option><option value="industrial">ISO / תעשייתי · 120×100</option><option value="gma">GMA · 122×102</option></select></label>}{workMode==="mixed"&&<label>בדיקת קומה נוספת<select value={heightOptimization?"optimized":"original"} onChange={e=>setHeightOptimization(e.target.value==="optimized")}><option value="original">גובה המשטח המקורי</option><option value="optimized">התאמת גובה אוטומטית לקומה נוספת</option></select></label>}</section>
     {workMode==="mixed"&&<section className={`container-summary card ${cbmDemandPct>100||weightDemandPct>100||weightIsLimiting?"over":""}`}><div className="container-capacity"><span>קיבולת המכולה הנבחרת</span><strong>{containerCbm.toFixed(1)} <small>CBM</small></strong><b>{containerType==="40RF"?"40RF · Reefer":containerType}</b></div><div className="container-facts"><div><span>מידות פנימיות</span><b>{c.l} × {c.w} × {c.h} ס״מ</b></div><div><span>משקל מטען מרבי לפי הציוד</span><b>{c.maxKg.toLocaleString()} ק״ג</b></div><div className={weightDemandPct>100||weightIsLimiting?"fact-alert":""}><span>משקל המטען שבחרת</span><b>{plannedWeightKg.toLocaleString()} ק״ג · {weightDemandPct.toFixed(1)}%</b>{(weightDemandPct>100||weightIsLimiting)&&<small>לא ניתן למלא את המכולה מעבר לנקודה זו עקב מגבלת משקל</small>}</div></div><p>CBM הוא נפח תיאורטי. הקיבולת המעשית מחושבת גם לפי מידות הקרטונים, המשטחים, צורת הסידור והמשקל. יש לאמת מגבלות כביש ונמל לפי מדינת היעד.</p></section>}
