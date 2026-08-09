@@ -3,10 +3,11 @@
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type LoadType = "Palletized" | "Loose";
-type PalletPreset = "database" | "euro" | "industrial" | "gma";
+type PalletPreset = "database" | "euro" | "industrial" | "gma" | "halfEuro";
 type ImportStatus = { kind: "idle" | "loading" | "success" | "error"; message: string };
 type Item = {
-  id: string; description: string; supplier: string; loadType: LoadType;
+  /** Internal, row-level identity. Never use the SKU as a React or scenario key. */
+  rowId: string; id: string; description: string; supplier: string; loadType: LoadType;
   qty: number; l: number; w: number; h: number; weight: number;
   cartonsPerPallet: number; cartonsPerLayer: number; layers: number;
   palletL: number; palletW: number; palletH: number; palletBaseH?: number;
@@ -15,6 +16,7 @@ type Item = {
   stackable?: boolean; maxStackLayers?: number; maxStackWeightKg?: number;
   cartonRotatable?: boolean; mustStayUpright?: boolean; estimated?: boolean;
 };
+type ScenarioEntry = { rowId: string; qty: number; loadType: LoadType };
 
 const containers = {
   "20FT": { l: 589, w: 235, h: 239, maxKg: 28000 },
@@ -24,13 +26,13 @@ const containers = {
 };
 
 const demoItems: Item[] = [
-  { id:"0310118", description:"מיני מנטוס 150 יח׳ בצילינדר", supplier:"VAN MELLE", loadType:"Palletized", qty:336, l:40,w:30,h:25,weight:9.45,cartonsPerPallet:24,cartonsPerLayer:4,layers:6,palletL:120,palletW:100,palletH:165 },
-  { id:"0310124", description:"מנטוס שקית מסיבה 430 גרם", supplier:"VAN MELLE", loadType:"Palletized", qty:600, l:40,w:30,h:25,weight:5.16,cartonsPerPallet:60,cartonsPerLayer:10,layers:6,palletL:120,palletW:100,palletH:165 },
-  { id:"2263001", description:"בראוניז שוקולד 200 גרם", supplier:"MR BROWNIE", loadType:"Palletized", qty:756, l:20,w:40,h:35,weight:2.4,cartonsPerPallet:63,cartonsPerLayer:9,layers:7,palletL:120,palletW:80,palletH:260,estimated:true },
-  { id:"2401503", description:"חטיף לואקר קלאסי", supplier:"LOACKER 50CM 2026", loadType:"Loose", qty:960, l:20,w:40,h:35,weight:4,cartonsPerPallet:60,cartonsPerLayer:10,layers:6,palletL:120,palletW:80,palletH:225,estimated:true },
-  { id:"6500404", description:"Lavazza Crema Gusto", supplier:"LAVAZZA", loadType:"Palletized", qty:1240, l:50,w:40,h:35,weight:5.55,cartonsPerPallet:155,cartonsPerLayer:31,layers:5,palletL:120,palletW:100,palletH:190,estimated:true },
-  { id:"6912046", description:"יוגורטה תות 80 גרם", supplier:"GENERAL MILLS", loadType:"Loose", qty:720, l:50,w:50,h:35,weight:5.76,cartonsPerPallet:66,cartonsPerLayer:11,layers:6,palletL:120,palletW:100,palletH:225,estimated:true },
-  { id:"9301170", description:"מרכך כביסה 1 ליטר", supplier:"BIOMAT", loadType:"Palletized", qty:540, l:50,w:50,h:35,weight:12.04,cartonsPerPallet:60,cartonsPerLayer:10,layers:6,palletL:120,palletW:100,palletH:225,estimated:true },
+  { rowId:"demo-1",id:"0310118", description:"מיני מנטוס 150 יח׳ בצילינדר", supplier:"VAN MELLE", loadType:"Palletized", qty:336, l:40,w:30,h:25,weight:9.45,cartonsPerPallet:24,cartonsPerLayer:4,layers:6,palletL:120,palletW:100,palletH:165 },
+  { rowId:"demo-2",id:"0310124", description:"מנטוס שקית מסיבה 430 גרם", supplier:"VAN MELLE", loadType:"Palletized", qty:600, l:40,w:30,h:25,weight:5.16,cartonsPerPallet:60,cartonsPerLayer:10,layers:6,palletL:120,palletW:100,palletH:165 },
+  { rowId:"demo-3",id:"2263001", description:"בראוניז שוקולד 200 גרם", supplier:"MR BROWNIE", loadType:"Palletized", qty:756, l:20,w:40,h:35,weight:2.4,cartonsPerPallet:63,cartonsPerLayer:9,layers:7,palletL:120,palletW:80,palletH:260,estimated:true },
+  { rowId:"demo-4",id:"2401503", description:"חטיף לואקר קלאסי", supplier:"LOACKER 50CM 2026", loadType:"Loose", qty:960, l:20,w:40,h:35,weight:4,cartonsPerPallet:60,cartonsPerLayer:10,layers:6,palletL:120,palletW:80,palletH:225,estimated:true },
+  { rowId:"demo-5",id:"6500404", description:"Lavazza Crema Gusto", supplier:"LAVAZZA", loadType:"Palletized", qty:1240, l:50,w:40,h:35,weight:5.55,cartonsPerPallet:155,cartonsPerLayer:31,layers:5,palletL:120,palletW:100,palletH:190,estimated:true },
+  { rowId:"demo-6",id:"6912046", description:"יוגורטה תות 80 גרם", supplier:"GENERAL MILLS", loadType:"Loose", qty:720, l:50,w:50,h:35,weight:5.76,cartonsPerPallet:66,cartonsPerLayer:11,layers:6,palletL:120,palletW:100,palletH:225,estimated:true },
+  { rowId:"demo-7",id:"9301170", description:"מרכך כביסה 1 ליטר", supplier:"BIOMAT", loadType:"Palletized", qty:540, l:50,w:50,h:35,weight:12.04,cartonsPerPallet:60,cartonsPerLayer:10,layers:6,palletL:120,palletW:100,palletH:225,estimated:true },
 ];
 
 type Packed = { x:number; y:number; z:number; l:number; w:number; h:number; item:Item; units:number };
@@ -166,6 +168,7 @@ function rowsToItems(rows: Record<string,unknown>[]) {
     const palletBaseHeight=value(r,"PalletHeightCm","Pallet Height empty (cm)","Pallet Height\nempty (cm)");
     const loadedPalletHeight=value(r,"LoadedPalletHeightCm","Loaded Pallet Height (cm)","Loaded Pallet\nHeight (cm)");
     const item:Item={
+      rowId:`row-${idx + 1}-${String(itemNumber||`ITEM-${idx+1}`).trim()}`,
       id:String(itemNumber||`ITEM-${idx+1}`).trim(),
       description:String(value(r,"ItemDescription","Item Description","ENG","Supplier's Item description","Suppllier's Item description")||"פריט ללא תיאור"),
       supplier:lastSupplier,
@@ -209,21 +212,33 @@ function worksheetToItems(XLSX:typeof import("xlsx"),sheet:import("xlsx").WorkSh
   return rowsToItems(records);
 }
 
-function workbookToItems(XLSX:typeof import("xlsx"),workbook:import("xlsx").WorkBook){
+export function workbookToItems(XLSX:typeof import("xlsx"),workbook:import("xlsx").WorkBook){
   for(const sheetName of workbook.SheetNames){
     const mapped=worksheetToItems(XLSX,workbook.Sheets[sheetName]);
-    if(mapped.length)return Array.from(new Map(mapped.map(item=>[item.id,item])).values());
+    // A SKU can legitimately occur on several loading rows (e.g. alternatives).
+    // Keep every row; rowId, not SKU, is the identity used by the scenario.
+    if(mapped.length)return mapped;
   }
   return [];
 }
 
 function applyPalletPreset(item:Item,preset:PalletPreset){
   if(preset==="database")return item;
-  const [palletL,palletW]=preset==="euro"?[120,80]:preset==="gma"?[122,102]:[120,100];
+  const [palletL,palletW]=preset==="euro"?[120,80]:preset==="halfEuro"?[80,60]:preset==="gma"?[122,102]:[120,100];
   const baseArea=Math.max(1,item.palletL*item.palletW);
   const areaRatio=palletL*palletW/baseArea;
   const cartonsPerLayer=Math.max(1,Math.floor(item.cartonsPerLayer*areaRatio));
   return {...item,palletL,palletW,cartonsPerLayer,cartonsPerPallet:cartonsPerLayer*Math.max(1,item.layers)};
+}
+
+function ensureRowIds(raw: Item[]){
+  const seen=new Map<string,number>();
+  return raw.map((item,index)=>{
+    const base=item.rowId||`import-${index+1}-${item.id}`;
+    const repeat=seen.get(base)||0;
+    seen.set(base,repeat+1);
+    return {...item,rowId:repeat?`${base}-${repeat+1}`:base};
+  });
 }
 
 function ContainerCanvas({result, mode, container, colorById}:{result:ReturnType<typeof pack>;mode:"2d"|"3d";container:typeof containers["40HC"];colorById:Map<string,string>}){
@@ -233,17 +248,17 @@ function ContainerCanvas({result, mode, container, colorById}:{result:ReturnType
   useEffect(()=>{
     const canvas=ref.current;if(!canvas)return;const ctx=canvas.getContext("2d");if(!ctx)return;
     const dpr=window.devicePixelRatio||1;const rect=canvas.getBoundingClientRect();canvas.width=rect.width*dpr;canvas.height=rect.height*dpr;ctx.scale(dpr,dpr);
-    const W=rect.width,H=rect.height;ctx.clearRect(0,0,W,H);const packedColor=(id:string)=>colorById.get(id)||colors[0];
+    const W=rect.width,H=rect.height;ctx.clearRect(0,0,W,H);const packedColor=(rowId:string)=>colorById.get(rowId)||colors[0];
     if(mode==="2d"){
       const pad=22,scale=Math.min((W-pad*2)/container.l,(H-pad*2)/container.w);const ox=(W-container.l*scale)/2,oy=(H-container.w*scale)/2;
       ctx.fillStyle="#f8fafc";ctx.strokeStyle="#334155";ctx.lineWidth=2;ctx.fillRect(ox,oy,container.l*scale,container.w*scale);ctx.strokeRect(ox,oy,container.l*scale,container.w*scale);
-      result.packed.filter(p=>p.z===0).forEach((p)=>{ctx.fillStyle=packedColor(p.item.id);ctx.fillRect(ox+p.x*scale,oy+p.y*scale,p.l*scale,p.w*scale);ctx.strokeStyle=p.item.loadType==="Palletized"?"#6b4423":"#fff";ctx.lineWidth=p.item.loadType==="Palletized"?2:1;ctx.strokeRect(ox+p.x*scale,oy+p.y*scale,p.l*scale,p.w*scale);if(p.l*scale>34){ctx.fillStyle="#fff";ctx.font="600 10px Arial";ctx.fillText(p.item.id.slice(-4),ox+p.x*scale+4,oy+p.y*scale+13)}});
+      result.packed.filter(p=>p.z===0).forEach((p)=>{ctx.fillStyle=packedColor(p.item.rowId);ctx.fillRect(ox+p.x*scale,oy+p.y*scale,p.l*scale,p.w*scale);ctx.strokeStyle=p.item.loadType==="Palletized"?"#6b4423":"#fff";ctx.lineWidth=p.item.loadType==="Palletized"?2:1;ctx.strokeRect(ox+p.x*scale,oy+p.y*scale,p.l*scale,p.w*scale);if(p.l*scale>34){ctx.fillStyle="#fff";ctx.font="600 10px Arial";ctx.fillText(p.item.id.slice(-4),ox+p.x*scale+4,oy+p.y*scale+13)}});
     }else{
       const sx=Math.min(W/(container.l+container.w),H/(container.h+container.w*.55))*.88*view.zoom,cx=container.l/2,cy=container.w/2,cz=container.h/2,cosY=Math.cos(view.yaw),sinY=Math.sin(view.yaw),sinP=Math.sin(view.pitch),cosP=Math.cos(view.pitch);
       const iso=(x:number,y:number,z:number)=>{const dx=x-cx,dy=y-cy,dz=z-cz,rx=dx*cosY-dy*sinY,depth=dx*sinY+dy*cosY;return{x:W/2+rx*sx,y:H/2+(depth*sinP-dz*cosP)*sx}};
       const ordered=[...result.packed].sort((a,b)=>{const da=(a.x+a.l/2-cx)*sinY+(a.y+a.w/2-cy)*cosY;const db=(b.x+b.l/2-cx)*sinY+(b.y+b.w/2-cy)*cosY;return da-db});
       const drawSolid=(x:number,y:number,z:number,l:number,w:number,h:number,col:string,stroke:string="#ffffff")=>{const a=iso(x,y,z),b=iso(x+l,y,z),c=iso(x+l,y+w,z),at=iso(x,y,z+h),bt=iso(x+l,y,z+h),ct=iso(x+l,y+w,z+h),dt=iso(x,y+w,z+h);ctx.globalAlpha=1;ctx.lineWidth=.8;ctx.strokeStyle=stroke;ctx.fillStyle=shadeColor(col,1.08);ctx.beginPath();ctx.moveTo(at.x,at.y);ctx.lineTo(bt.x,bt.y);ctx.lineTo(ct.x,ct.y);ctx.lineTo(dt.x,dt.y);ctx.closePath();ctx.fill();ctx.stroke();ctx.fillStyle=col;ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.lineTo(bt.x,bt.y);ctx.lineTo(at.x,at.y);ctx.closePath();ctx.fill();ctx.stroke();ctx.fillStyle=shadeColor(col,.78);ctx.beginPath();ctx.moveTo(b.x,b.y);ctx.lineTo(c.x,c.y);ctx.lineTo(ct.x,ct.y);ctx.lineTo(bt.x,bt.y);ctx.closePath();ctx.fill();ctx.stroke()};
-      ordered.forEach((p)=>{const col=packedColor(p.item.id);if(p.item.loadType==="Palletized"){const palletH=Math.min(12,Math.max(8,p.h*.09)),runnerH=Math.min(4,palletH/2),runnerW=Math.min(12,p.w/5);[0,(p.w-runnerW)/2,p.w-runnerW].forEach(offset=>drawSolid(p.x,p.y+offset,p.z,p.l,runnerW,runnerH,"#6b4423","#5b3a20"));drawSolid(p.x,p.y,p.z+runnerH,p.l,p.w,palletH-runnerH,"#a4713f","#5b3a20");drawSolid(p.x,p.y,p.z+palletH,p.l,p.w,Math.max(1,p.h-palletH),col)}else drawSolid(p.x,p.y,p.z,p.l,p.w,p.h,col)});ctx.globalAlpha=1;
+      ordered.forEach((p)=>{const col=packedColor(p.item.rowId);if(p.item.loadType==="Palletized"){const palletH=Math.min(12,Math.max(8,p.h*.09)),runnerH=Math.min(4,palletH/2),runnerW=Math.min(12,p.w/5);[0,(p.w-runnerW)/2,p.w-runnerW].forEach(offset=>drawSolid(p.x,p.y+offset,p.z,p.l,runnerW,runnerH,"#6b4423","#5b3a20"));drawSolid(p.x,p.y,p.z+runnerH,p.l,p.w,palletH-runnerH,"#a4713f","#5b3a20");drawSolid(p.x,p.y,p.z+palletH,p.l,p.w,Math.max(1,p.h-palletH),col)}else drawSolid(p.x,p.y,p.z,p.l,p.w,p.h,col)});ctx.globalAlpha=1;
       const corners=[[0,0,0],[container.l,0,0],[container.l,container.w,0],[0,container.w,0],[0,0,container.h],[container.l,0,container.h],[container.l,container.w,container.h],[0,container.w,container.h]].map(v=>iso(v[0],v[1],v[2]));ctx.strokeStyle="#334155";ctx.lineWidth=1.4;[[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]].forEach(([a,b])=>{ctx.beginPath();ctx.moveTo(corners[a].x,corners[a].y);ctx.lineTo(corners[b].x,corners[b].y);ctx.stroke()});
     }
   },[result,mode,container,view,colorById]);
@@ -254,10 +269,31 @@ function ContainerCanvas({result, mode, container, colorById}:{result:ReturnType
 }
 
 export default function Home(){
-  const [items,setItems]=useState<Item[]>(demoItems);const [selected,setSelected]=useState<string[]>(demoItems.map(x=>x.id));const [containerType,setContainerType]=useState<keyof typeof containers>("40HC");const [supplier,setSupplier]=useState("הכול");const [tab,setTab]=useState<"2d"|"3d">("3d");const [fileName,setFileName]=useState("LOADING_METHOD.xlsx");const [importStatus,setImportStatus]=useState<ImportStatus>({kind:"idle",message:""});const [hydrated,setHydrated]=useState(false);const userImportRef=useRef(false);const [workMode,setWorkMode]=useState<"single"|"mixed">("single");const [simulationMode,setSimulationMode]=useState<"database"|"palletized"|"loose">("database");const [palletPreset,setPalletPreset]=useState<PalletPreset>("database");const [heightOptimization,setHeightOptimization]=useState(false);const [focusId,setFocusId]=useState(demoItems[0].id);
+  const [items,setItems]=useState<Item[]>(demoItems);
+  const [scenario,setScenario]=useState<ScenarioEntry[]>(demoItems.map(item=>({rowId:item.rowId,qty:item.qty,loadType:item.loadType})));
+  const [containerType,setContainerType]=useState<keyof typeof containers>("40HC");
+  const [supplier,setSupplier]=useState("הכול");
+  const [tab,setTab]=useState<"2d"|"3d">("3d");
+  const [fileName,setFileName]=useState("LOADING_METHOD.xlsx");
+  const [importStatus,setImportStatus]=useState<ImportStatus>({kind:"idle",message:""});
+  const [hydrated,setHydrated]=useState(false);
+  const userImportRef=useRef(false);
+  const [workMode,setWorkMode]=useState<"single"|"mixed">("mixed");
+  const [simulationMode,setSimulationMode]=useState<"mixed"|"palletized"|"loose">("mixed");
+  const [palletPreset,setPalletPreset]=useState<PalletPreset>("database");
+  const [heightOptimization,setHeightOptimization]=useState(false);
+  const [focusId,setFocusId]=useState(demoItems[0].rowId);
   const c=containers[containerType];
-  const visible=useMemo(()=>items.filter(i=>(supplier==="הכול"||i.supplier===supplier)&&selected.includes(i.id)),[items,supplier,selected]);
-  const simulationItems=useMemo(()=>visible.map(item=>{const withMode=simulationMode==="database"?item:{...item,loadType:simulationMode==="palletized"?"Palletized" as LoadType:"Loose" as LoadType};const prepared=withMode.loadType==="Palletized"?applyPalletPreset(withMode,palletPreset):withMode;return heightOptimization?optimizePalletHeightForExtraTier(prepared,c):prepared}),[visible,simulationMode,palletPreset,heightOptimization,c]);
+  const itemByRowId=useMemo(()=>new Map(items.map(item=>[item.rowId,item])),[items]);
+  const visible=useMemo(()=>scenario.flatMap(entry=>{
+    const item=itemByRowId.get(entry.rowId);
+    return item?[{...item,qty:entry.qty,loadType:entry.loadType}]:[];
+  }),[scenario,itemByRowId]);
+  const simulationItems=useMemo(()=>visible.map(item=>{
+    const withMode=simulationMode==="mixed"?item:{...item,loadType:simulationMode==="palletized"?"Palletized" as LoadType:"Loose" as LoadType};
+    const prepared=withMode.loadType==="Palletized"?applyPalletPreset(withMode,palletPreset):withMode;
+    return heightOptimization?optimizePalletHeightForExtraTier(prepared,c):prepared;
+  }),[visible,simulationMode,palletPreset,heightOptimization,c]);
   const result=useMemo(()=>pack(simulationItems,c,1),[simulationItems,c]);
   const currentCapacity=useMemo(()=>capacityForMix(simulationItems,c,1),[simulationItems,c]);
   const palletizedItems=useMemo(()=>visible.map(item=>applyPalletPreset({...item,loadType:"Palletized" as LoadType},palletPreset)),[visible,palletPreset]);
@@ -294,10 +330,11 @@ export default function Home(){
   const cbmDemandPct=containerCbm?plannedPhysicalCbm/containerCbm*100:0;
   const netCargoPct=containerCbm?netCargoCbm/containerCbm*100:0;
   const palletizedCbmPct=containerCbm?palletizedPhysicalCbm/containerCbm*100:0;
-  const plannedWeightKg=visible.reduce((sum,item)=>sum+item.qty*item.weight+(item.loadType==="Palletized"?Math.ceil(item.qty/Math.max(1,item.cartonsPerPallet))*(item.palletBaseWeight||0):0),0);
+  const plannedWeightKg=simulationItems.reduce((sum,item)=>sum+item.qty*item.weight+(item.loadType==="Palletized"?Math.ceil(item.qty/Math.max(1,item.cartonsPerPallet))*(item.palletBaseWeight||0):0),0);
   const weightDemandPct=c.maxKg?plannedWeightKg/c.maxKg*100:0;
-  const scenarioVolumeLabel=simulationMode==="loose"?"נפח קרטונים ללא משטחים":simulationMode==="palletized"?"נפח כולל משטחים":"נפח לפי שיטת ההעמסה מהקובץ";
-  const palletPresetLabel=palletPreset==="database"?"לפי נתוני הפריטים":palletPreset==="euro"?"Euro 120×80":palletPreset==="gma"?"GMA 122×102":"ISO 120×100";
+  const scenarioVolumeLabel=simulationMode==="loose"?"נפח קרטונים ללא משטחים":simulationMode==="palletized"?"נפח כולל משטחים":"נפח לפי שיטת ההעמסה של כל שורה";
+  const scenarioMethodLabel=simulationMode==="palletized"?"הכול ממושטַח":simulationMode==="loose"?"הכול Loose":"מעורב · משטח ו־Loose לפי כל שורה";
+  const palletPresetLabel=palletPreset==="database"?"לפי נתוני הפריטים":palletPreset==="euro"?"Euro 120×80":palletPreset==="halfEuro"?"חצי Euro 80×60":palletPreset==="gma"?"GMA 122×102":"ISO / תעשייתי 120×100";
   const heightCandidateIndex=palletizedItems.findIndex((item,index)=>optimizedPalletizedItems[index]&&optimizedPalletizedItems[index].palletH<item.palletH);
   const heightCandidate=heightCandidateIndex>=0?palletizedItems[heightCandidateIndex]:null;
   const optimizedHeightCandidate=heightCandidateIndex>=0?optimizedPalletizedItems[heightCandidateIndex]:null;
@@ -306,69 +343,103 @@ export default function Home(){
   const singleMixItem=visible.length===1?palletizedItems[0]:null;
   const looseVsPalletRatio=palletScenario.loaded?looseScenario.loaded/palletScenario.loaded:0;
   const suppliers=["הכול",...Array.from(new Set(items.map(i=>i.supplier)))];
-  useEffect(()=>{let active=true;(async()=>{const saved=localStorage.getItem("container-suppliers-v5");if(saved){try{const parsed=(JSON.parse(saved) as Item[]).map(item=>({...item,supplier:item.supplier==="LI}TON"?"LIPTON":item.supplier}));if(Array.isArray(parsed)&&parsed.length&&active&&!userImportRef.current){const savedFileName=localStorage.getItem("container-file-name-v1")||"הקובץ השמור";setItems(parsed);setSelected(parsed.slice(0,7).map((x:Item)=>x.id));setFocusId(parsed[0].id);setFileName(savedFileName);setImportStatus({kind:"success",message:`שמורים ${parsed.length} מק״טים`});setHydrated(true);return}}catch{}}try{const XLSX=await import("xlsx");const response=await fetch("assets/loading-demo.xlsx");const wb=XLSX.read(await response.arrayBuffer());const parsed=workbookToItems(XLSX,wb);if(active&&!userImportRef.current&&parsed.length){setItems(parsed);setSelected(parsed.slice(0,7).map(x=>x.id));setFocusId(parsed[0].id);setHydrated(true);localStorage.setItem("container-suppliers-v5",JSON.stringify(parsed))}}catch{if(active&&!userImportRef.current)setHydrated(true)}})();return()=>{active=false}},[]);
+  useEffect(()=>{let active=true;(async()=>{
+    const restoreScenario=(loaded:Item[])=>{
+      const savedScenario=localStorage.getItem("container-active-scenario-v1");
+      if(!savedScenario)return;
+      try{
+        const validIds=new Set(loaded.map(item=>item.rowId));
+        const restored=(JSON.parse(savedScenario) as ScenarioEntry[]).filter(entry=>validIds.has(entry.rowId));
+        if(active)setScenario(restored);
+      }catch{}
+    };
+    const saved=localStorage.getItem("container-suppliers-v5");
+    if(saved){
+      try{
+        const parsed=ensureRowIds((JSON.parse(saved) as Item[]).map(item=>({...item,supplier:item.supplier==="LI}TON"?"LIPTON":item.supplier})));
+        if(Array.isArray(parsed)&&parsed.length&&active&&!userImportRef.current){
+          const savedFileName=localStorage.getItem("container-file-name-v1")||"הקובץ השמור";
+          setItems(parsed);setFocusId(parsed[0].rowId);setFileName(savedFileName);setImportStatus({kind:"success",message:`שמורות ${parsed.length} שורות טעינה`});restoreScenario(parsed);setHydrated(true);return;
+        }
+      }catch{}
+    }
+    try{
+      const XLSX=await import("xlsx");const response=await fetch("assets/loading-demo.xlsx");const wb=XLSX.read(await response.arrayBuffer());const parsed=ensureRowIds(workbookToItems(XLSX,wb));
+      if(active&&!userImportRef.current&&parsed.length){setItems(parsed);setScenario(parsed.map(item=>({rowId:item.rowId,qty:item.qty,loadType:item.loadType})));setFocusId(parsed[0].rowId);setHydrated(true);localStorage.setItem("container-suppliers-v5",JSON.stringify(parsed));}
+    }catch{if(active&&!userImportRef.current)setHydrated(true)}
+  })();return()=>{active=false}},[]);
   useEffect(()=>{if(hydrated)localStorage.setItem("container-suppliers-v5",JSON.stringify(items))},[items,hydrated]);
+  useEffect(()=>{if(hydrated)localStorage.setItem("container-active-scenario-v1",JSON.stringify(scenario))},[scenario,hydrated]);
   const importFile=async(e:ChangeEvent<HTMLInputElement>)=>{
     const input=e.currentTarget,file=input.files?.[0];if(!file)return;
     userImportRef.current=true;setImportStatus({kind:"loading",message:"קוראת את הקובץ…"});
     try{
       const XLSX=await import("xlsx");
       const wb=XLSX.read(await file.arrayBuffer());
-      const mapped=workbookToItems(XLSX,wb);
+      const mapped=ensureRowIds(workbookToItems(XLSX,wb));
       if(!mapped.length)throw new Error("לא נמצאו שורות פריטים בפורמט הנתמך");
       const supplierNames=Array.from(new Set(mapped.map(item=>item.supplier))).filter(name=>name!=="ספק לא מוגדר");
-      setItems(mapped);setSelected(mapped.slice(0,7).map(x=>x.id));setSupplier("הכול");setFocusId(mapped[0].id);setFileName(file.name);setHydrated(true);
+      setItems(mapped);setScenario([]);setSupplier("הכול");setFocusId(mapped[0].rowId);setFileName(file.name);setHydrated(true);
       localStorage.setItem("container-suppliers-v5",JSON.stringify(mapped));localStorage.setItem("container-file-name-v1",file.name);
-      setImportStatus({kind:"success",message:`נקלטו ${mapped.length} מק״טים${supplierNames.length?` · ${supplierNames.join(", ")}`:""}`});
+      setImportStatus({kind:"success",message:`נקלטו ${mapped.length} שורות טעינה${supplierNames.length?` · ${supplierNames.join(", ")}`:""}`});
     }catch(error){
       const message=error instanceof Error?error.message:"לא ניתן לקרוא את הקובץ";
       setImportStatus({kind:"error",message:`הקובץ לא נקלט: ${message}`});
     }finally{input.value=""}
   };
-  const changeSupplier=(value:string)=>{setSupplier(value);const pool=value==="הכול"?items:items.filter(i=>i.supplier===value);if(pool.length){setFocusId(pool[0].id);setSelected(pool.slice(0,7).map(i=>i.id))}};
-  const updateQty=(id:string,qty:number)=>setItems(v=>v.map(x=>x.id===id?{...x,qty:Math.max(0,qty)}:x));
-  const focus=items.find(x=>x.id===focusId)||items[0];
-  const legendItems=Array.from(new Map(result.packed.map(p=>[p.item.id,p.item])).values()).slice(0,7);
+  const changeSupplier=(value:string)=>{setSupplier(value);const pool=value==="הכול"?items:items.filter(i=>i.supplier===value);if(pool.length)setFocusId(pool[0].rowId)};
+  const updateSourceQty=(rowId:string,qty:number)=>setItems(v=>v.map(x=>x.rowId===rowId?{...x,qty:Math.max(0,qty)}:x));
+  const updateScenarioQty=(rowId:string,qty:number)=>setScenario(v=>v.map(entry=>entry.rowId===rowId?{...entry,qty:Math.max(0,qty)}:entry));
+  const updateScenarioLoadType=(rowId:string,loadType:LoadType)=>setScenario(v=>v.map(entry=>entry.rowId===rowId?{...entry,loadType}:entry));
+  const toggleScenario=(item:Item)=>setScenario(current=>current.some(entry=>entry.rowId===item.rowId)?current.filter(entry=>entry.rowId!==item.rowId):[...current,{rowId:item.rowId,qty:item.qty,loadType:item.loadType}]);
+  const addVisibleToScenario=()=>setScenario(current=>{
+    const existing=new Set(current.map(entry=>entry.rowId));
+    const additions=items.filter(item=>(supplier==="הכול"||item.supplier===supplier)&&!existing.has(item.rowId)).map(item=>({rowId:item.rowId,qty:item.qty,loadType:item.loadType}));
+    return [...current,...additions];
+  });
+  const focus=items.find(x=>x.rowId===focusId)||items[0];
+  const legendItems=Array.from(new Map(result.packed.map(p=>[p.item.rowId,p.item])).values()).slice(0,7);
   const colorById=useMemo(()=>{
     const map=new Map<string,string>();
     const supplierIndex=new Map<string,number>();
     items.forEach((item)=>{
       const index=supplierIndex.get(item.supplier)||0;
-      map.set(item.id,colors[index%colors.length]);
+      map.set(item.rowId,colors[index%colors.length]);
       supplierIndex.set(item.supplier,index+1);
     });
     return map;
   },[items]);
   return <main dir="rtl">
-    <header className="topbar"><div className="brand"><img src="assets/ls-logo.png" alt="ליימן שליסל"/><div><div className="eyebrow">LOADWISE · כלי תכנון יבוא</div><h1>מקסום העמסת מכולות</h1></div></div><label className="upload"><span>＋</span><span><b>ייבוא Excel / CSV</b><small>{fileName}</small>{importStatus.kind!=="idle"&&<em className={`import-status ${importStatus.kind}`} role="status">{importStatus.message}</em>}</span><input type="file" accept=".xlsx,.xls,.csv" onChange={importFile}/></label></header>
-    <nav className="mode-switch"><button className={workMode==="single"?"active":""} onClick={()=>setWorkMode("single")}><b>יכולת העמסה לפריט</b><small>מקסימום ומומלץ לכל מק״ט</small></button><button className={workMode==="mixed"?"active":""} onClick={()=>setWorkMode("mixed")}><b>העמסה מעורבת</b><small>בניית הזמנה ממספר פריטים</small></button></nav>
-    <section className="controls card"><label>ספק<select value={supplier} onChange={e=>changeSupplier(e.target.value)}>{suppliers.map(s=><option key={s}>{s}</option>)}</select></label><label>מכולה לסימולציה<select value={containerType} onChange={e=>setContainerType(e.target.value as keyof typeof containers)}>{Object.keys(containers).map(s=><option key={s} value={s}>{s==="40RF"?"40RF · Reefer":s}</option>)}</select></label>{workMode==="mixed"&&<label>איך להעמיס בסימולציה<select value={simulationMode} onChange={e=>setSimulationMode(e.target.value as "database"|"palletized"|"loose")}><option value="database">כמו שמוגדר בקובץ לכל פריט</option><option value="palletized">הכול על משטחים</option><option value="loose">הכול ללא משטחים · Loose</option></select></label>}{workMode==="mixed"&&<label>סוג משטח להשוואה<select value={palletPreset} onChange={e=>setPalletPreset(e.target.value as PalletPreset)}><option value="database">המידות שמופיעות בקובץ</option><option value="euro">Euro · 120×80</option><option value="industrial">ISO / תעשייתי · 120×100</option><option value="gma">GMA · 122×102</option></select></label>}{workMode==="mixed"&&<label>בדיקת קומה נוספת<select value={heightOptimization?"optimized":"original"} onChange={e=>setHeightOptimization(e.target.value==="optimized")}><option value="original">גובה המשטח המקורי</option><option value="optimized">התאמת גובה אוטומטית לקומה נוספת</option></select></label>}</section>
+    <header className="topbar"><div className="brand"><img src="assets/ls-logo.png" alt="ליימן שליסל"/><div><div className="eyebrow">LOADWISE · כלי תכנון יבוא</div><h1>סימולטור העמסה</h1></div></div><label className="upload"><span>＋</span><span><b>ייבוא Excel / CSV</b><small>{fileName}</small>{importStatus.kind!=="idle"&&<em className={`import-status ${importStatus.kind}`} role="status">{importStatus.message}</em>}</span><input type="file" accept=".xlsx,.xls,.csv" onChange={importFile}/></label></header>
+    <nav className="mode-switch"><button className={workMode==="mixed"?"active":""} onClick={()=>setWorkMode("mixed")}><b>סימולטור העמסה</b><small>בניית תרחיש מעורב של משטחים ו־Loose</small></button><button className={workMode==="single"?"active":""} onClick={()=>setWorkMode("single")}><b>יכולת העמסה לפריט</b><small>מקסימום ומומלץ לכל מק״ט</small></button></nav>
+    <section className="controls card"><label>ספק<select value={supplier} onChange={e=>changeSupplier(e.target.value)}>{suppliers.map(s=><option key={s}>{s}</option>)}</select></label><label>מכולה לסימולציה<select value={containerType} onChange={e=>setContainerType(e.target.value as keyof typeof containers)}>{Object.keys(containers).map(s=><option key={s} value={s}>{s==="40RF"?"40RF · Reefer":s}</option>)}</select></label>{workMode==="mixed"&&<label>שיטת העמסה בסימולציה<select value={simulationMode} onChange={e=>setSimulationMode(e.target.value as "mixed"|"palletized"|"loose")}><option value="mixed">העמסה מעורבת · משטח + Loose לפי שורה</option><option value="palletized">הכול על משטחים</option><option value="loose">הכול ללא משטחים · Loose</option></select></label>}{workMode==="mixed"&&<label>סוג משטח<select value={palletPreset} onChange={e=>setPalletPreset(e.target.value as PalletPreset)}><option value="database">לפי מידות המשטח בקובץ</option><option value="euro">Euro · 120×80</option><option value="industrial">ISO / תעשייתי · 120×100</option><option value="gma">GMA · 122×102</option><option value="halfEuro">חצי Euro · 80×60</option></select></label>}{workMode==="mixed"&&<label>בדיקת שכבות עליונות<select value={heightOptimization?"optimized":"original"} onChange={e=>setHeightOptimization(e.target.value==="optimized")}><option value="original">ללא התאמת גובה</option><option value="optimized">בדקי התאמה לקומה נוספת</option></select></label>}{workMode==="mixed"&&<p className="control-guidance"><b>מה נבדק כאן?</b> האם התאמת גובה המשטח מאפשרת שכבת משטחים נוספת בחלק העליון של המכולה, ורק לפריטים שמסומנים Stackable ובמסגרת מגבלות הגובה והמשקל.</p>}</section>
     {workMode==="mixed"&&<section className={`container-summary card ${cbmDemandPct>100||weightDemandPct>100||weightIsLimiting?"over":""}`}><div className="container-capacity"><span>קיבולת המכולה הנבחרת</span><strong>{containerCbm.toFixed(1)} <small>CBM</small></strong><b>{containerType==="40RF"?"40RF · Reefer":containerType}</b></div><div className="container-facts"><div><span>מידות פנימיות</span><b>{c.l} × {c.w} × {c.h} ס״מ</b></div><div><span>משקל מטען מרבי לפי הציוד</span><b>{c.maxKg.toLocaleString()} ק״ג</b></div><div className={weightDemandPct>100||weightIsLimiting?"fact-alert":""}><span>משקל המטען שבחרת</span><b>{plannedWeightKg.toLocaleString()} ק״ג · {weightDemandPct.toFixed(1)}%</b>{(weightDemandPct>100||weightIsLimiting)&&<small>לא ניתן למלא את המכולה מעבר לנקודה זו עקב מגבלת משקל</small>}</div></div><p>CBM הוא נפח תיאורטי. הקיבולת המעשית מחושבת גם לפי מידות הקרטונים, המשטחים, צורת הסידור והמשקל. יש לאמת מגבלות כביש ונמל לפי מדינת היעד.</p></section>}
-    {workMode==="single"&&focus&&<section className="single card"><div className="single-picker"><label>בחרי פריט לבדיקה<select value={focus.id} onChange={e=>setFocusId(e.target.value)}>{items.filter(i=>supplier==="הכול"||i.supplier===supplier).map(i=><option key={i.id} value={i.id}>{i.id} · {i.description}</option>)}</select></label><div><span>ספק</span><b>{focus.supplier}</b></div><div><span>מידות קרטון</span><b>{focus.l}×{focus.w}×{focus.h} ס״מ</b></div><div><span>משקל קרטון</span><b>{focus.weight} ק״ג</b></div></div><div className="capacity-grid">{Object.entries(containers).map(([name,cont])=>{const loose=singleCapacity(focus,cont,false),pal=singleCapacity(focus,cont,true);return <article key={name}><h3>{name}</h3><div className="capacity-row"><span>קרטונים חופשיים</span><b>{loose.maximum.toLocaleString()}</b><small>מקסימום</small><strong>{loose.recommended.toLocaleString()}</strong><small>מומלץ</small><em>{loose.weightLimited?"מוגבל משקל":"מוגבל נפח"}</em></div><div className="capacity-row"><span>העמסה ממושטחת</span><b>{pal.maximum.toLocaleString()}</b><small>מקסימום</small><strong>{pal.recommended.toLocaleString()}</strong><small>מומלץ</small><em>{pal.loads.toLocaleString()} משטחים · {pal.weightLimited?"מוגבל משקל":"מוגבל נפח"}</em></div></article>})}</div><p className="method-note">הכמות המקסימלית היא גבול גאומטרי/משקלי. הכמות המומלצת מחושבת ב־94% מהקיבולת ומשאירה מרווח תפעולי לפתחים, סטיות מידות ואבטחת מטען.</p></section>}
+    {workMode==="single"&&focus&&<section className="single card"><div className="single-picker"><label>בחרי פריט לבדיקה<select value={focus.rowId} onChange={e=>setFocusId(e.target.value)}>{items.filter(i=>supplier==="הכול"||i.supplier===supplier).map(i=><option key={i.rowId} value={i.rowId}>{i.id} · {i.description}</option>)}</select></label><div><span>ספק</span><b>{focus.supplier}</b></div><div><span>מידות קרטון</span><b>{focus.l}×{focus.w}×{focus.h} ס״מ</b></div><div><span>משקל קרטון</span><b>{focus.weight} ק״ג</b></div></div><div className="capacity-grid">{Object.entries(containers).map(([name,cont])=>{const loose=singleCapacity(focus,cont,false),pal=singleCapacity(focus,cont,true);return <article key={name}><h3>{name}</h3><div className="capacity-row"><span>קרטונים חופשיים</span><b>{loose.maximum.toLocaleString()}</b><small>מקסימום</small><strong>{loose.recommended.toLocaleString()}</strong><small>מומלץ</small><em>{loose.weightLimited?"מוגבל משקל":"מוגבל נפח"}</em></div><div className="capacity-row"><span>העמסה ממושטחת</span><b>{pal.maximum.toLocaleString()}</b><small>מקסימום</small><strong>{pal.recommended.toLocaleString()}</strong><small>מומלץ</small><em>{pal.loads.toLocaleString()} משטחים · {pal.weightLimited?"מוגבל משקל":"מוגבל נפח"}</em></div></article>})}</div><p className="method-note">הכמות המקסימלית היא גבול גאומטרי/משקלי. הכמות המומלצת מחושבת ב־94% מהקיבולת ומשאירה מרווח תפעולי לפתחים, סטיות מידות ואבטחת מטען.</p></section>}
     {workMode==="mixed"&&<>
     <section className="kpis">
       <article><span>כמות שבחרת להעמיס</span><strong>{result.requested.toLocaleString()}</strong><small>קרטונים בתמהיל הנוכחי</small></article>
-      <article><span>קיבולת מרבית · {containerType}</span><strong>{currentCapacity.loaded.toLocaleString()}</strong><small>{simulationMode==="database"?"לפי שיטת ההעמסה של כל פריט":simulationMode==="palletized"?"בסימולציה ממושטחת":"בסימולציית Loose"}</small></article>
-      <article className={overflow>0?"critical":"good"}><span>{overflow>0?"חריגה מקיבולת המכולה":"אפשר להוסיף עד למילוי"}</span><strong>{(overflow>0?overflow:canAdd).toLocaleString()}</strong><small>{overflow>0?"קרטונים מעבר לקיבולת — לא ייכנסו":"קרטונים נוספים באותו יחס תמהיל"}</small></article>
+      <article><span>אומדן קיבולת · {containerType}</span><strong>{currentCapacity.loaded.toLocaleString()}</strong><small>{simulationMode==="mixed"?"לפי שיטת ההעמסה שבכל שורת תרחיש":simulationMode==="palletized"?"בסימולציה ממושטחת":"בסימולציית Loose"}</small></article>
+      <article className={overflow>0?"critical":"good"}><span>{overflow>0?"חריגת קיבולת · קרטונים":"אפשר להוסיף עד למילוי"}</span><strong>{(overflow>0?overflow:canAdd).toLocaleString()}</strong><small>{overflow>0?"קרטונים מעבר לקיבולת — לא ייכנסו; משטחים אינם נספרים כיחידה כאן":"קרטונים נוספים באותו יחס תמהיל"}</small></article>
       <article className={fillStatus}><span>מילוי ביחס לקיבולת</span><strong>{noCapacity?"לא ניתן":`${capacityFillPct.toFixed(1)}%`}</strong><small>{noCapacity?"היחידות אינן נכנסות במידות המכולה":`${result.requested.toLocaleString()} קרטונים מתוך קיבולת של ${currentCapacity.loaded.toLocaleString()}`}</small><i className="bar capacity-bar"><i style={{width:`${noCapacity?100:Math.min(100,capacityFillPct)}%`}}/></i></article>
       <article className={cbmDemandPct>100?"critical":cbmDemandPct>=85?"good":"under"}><span>{scenarioVolumeLabel}</span><strong>{plannedPhysicalCbm.toFixed(1)} CBM</strong><small>{cbmDemandPct.toFixed(1)}% מקיבולת המכולה · {containerCbm.toFixed(1)} CBM</small><i className="bar cbm-bar"><i style={{width:`${Math.min(100,cbmDemandPct)}%`}}/></i></article>
     </section>
+    <section className="active-scenario card"><div className="section-head"><div><h2>תרחיש פעיל · פריטים שנבחרו להעמסה</h2><p>{visible.length?"ערכי הכמות ושיטת ההעמסה כאן הם אלו שמחושבים בתכנית העמסה.":"בחרי פריטים בטבלה למטה כדי להוסיף אותם לתרחיש."}</p></div><button className="ghost" onClick={()=>setScenario([])} disabled={!scenario.length}>נקה תרחיש</button></div>{visible.length?<div className="table-wrap"><table><thead><tr><th>מק״ט</th><th>תיאור</th><th>כמות בתרחיש</th><th>שיטת העמסה לשורה</th><th></th></tr></thead><tbody>{visible.map(item=><tr key={item.rowId}><td><b>{item.id}</b></td><td>{item.description}</td><td><input className="qty scenario-qty" type="number" min="0" value={item.qty} onChange={e=>updateScenarioQty(item.rowId,Number(e.target.value))}/></td><td><select className="scenario-method" value={item.loadType} onChange={e=>updateScenarioLoadType(item.rowId,e.target.value as LoadType)}><option value="Palletized">משטח</option><option value="Loose">Loose</option></select>{simulationMode!=="mixed"&&<small className="override-note">מוחלף זמנית על־ידי שיטת ההעמסה הכללית</small>}</td><td><button className="row-remove" onClick={()=>toggleScenario(item)}>הסירי</button></td></tr>)}</tbody></table></div>:<div className="empty-scenario">אין עדיין פריטים בתרחיש. סימון פריט למטה יוסיף אותו לכאן, בלי לשנות את נתוני המקור בקובץ.</div>}</section>
     <div className={`load-summary ${weightIsLimiting?"critical":fillStatus}`}><strong>{weightIsLimiting?"לא ניתן למלא את המכולה עד סוף הנפח עקב מגבלת משקל":noCapacity?"לא ניתן להעמיס בתצורה שנבחרה":capacityFillPct>100?`חריגה של ${overflow.toLocaleString()} קרטונים`:capacityFillPct>=90?"המכולה מנוצלת היטב":`ניתן להוסיף עוד ${canAdd.toLocaleString()} קרטונים`}</strong><span>{weightIsLimiting?`המשקל מגיע ל־${currentCapacity.weightPct.toFixed(1)}% לפני שהנפח מתמלא. זו המגבלה הקובעת בתרחיש.`:noCapacity?"בדקי את גובה המשטח או עברי לתרחיש Loose.":capacityFillPct>100?`הכמות היא ${capacityFillPct.toFixed(1)}% מהקיבולת. יש להפחית את החריגה או לפצל למכולה נוספת.`:capacityFillPct>=90?`הכמות היא ${capacityFillPct.toFixed(1)}% מהקיבולת ונמצאת בטווח יעיל.`:`הכמות היא ${capacityFillPct.toFixed(1)}% מהקיבולת של ${containerType}.`}</span></div>
-    <section className="workspace"><div className="visual card"><div className="section-head"><div><h2>תכנית העמסה · {containerType}</h2><p>{simulationMode==="database"?"שיטת העמסה לפי נתוני הפריטים":simulationMode==="palletized"?"תרחיש: הכול ממושטַח":"תרחיש: הכול Loose"} · ניצולת נפח {result.volumePct.toFixed(1)}% · משקל {result.weightPct.toFixed(1)}%</p></div><div className="tabs"><button className={tab==="3d"?"active":""} onClick={()=>setTab("3d")}>תלת־ממד</button><button className={tab==="2d"?"active":""} onClick={()=>setTab("2d")}>מבט־על 2D</button></div></div><ContainerCanvas result={result} mode={tab} container={c} colorById={colorById}/><div className="legend">{legendItems.map((x)=><span key={x.id}><i style={{background:colorById.get(x.id)||colors[0]}}/>{x.id}</span>)}</div></div>
+    <section className="workspace"><div className="visual card"><div className="section-head"><div><h2>תכנית העמסה · {containerType}</h2><p>פרמטרים פעילים: {scenarioMethodLabel} · {palletPresetLabel} · {heightOptimization?"בדיקת שכבות עליונות פעילה":"ללא התאמת שכבות"} · ניצולת נפח {result.volumePct.toFixed(1)}% · משקל {result.weightPct.toFixed(1)}%</p></div><div className="tabs"><button className={tab==="3d"?"active":""} onClick={()=>setTab("3d")}>תלת־ממד</button><button className={tab==="2d"?"active":""} onClick={()=>setTab("2d")}>מבט־על 2D</button></div></div><ContainerCanvas result={result} mode={tab} container={c} colorById={colorById}/><div className="legend">{legendItems.map((x)=><span key={x.rowId}><i style={{background:colorById.get(x.rowId)||colors[0]}}/>{x.id}</span>)}</div></div>
       <aside className="optimizer card"><div className="section-head"><div><h2>המלצת העמסה · {containerType}</h2><p>אותם פריטים ואותן כמויות — השוואה בין משטחים ל־Loose</p></div></div>
       <div className="cbm-analysis"><h3>נפח מכולה פנימי</h3><div className="cbm-container"><strong>{containerCbm.toFixed(1)} CBM</strong><small>CBM למכולה נבחרת · {containerType}</small></div><div className={`cbm-metric ${netCargoPct>100?"critical":netCargoPct>=95?"good":"low"}`}><span>CBM נטו · כמות נבחרת</span><strong>{netCargoCbm.toFixed(1)} CBM</strong><small>{netCargoPct.toFixed(1)}% מנפח המכולה · קרטונים בלבד</small></div><div className={`cbm-metric ${palletizedCbmPct>100?"critical":palletizedCbmPct>=95?"good":"low"}`}><span>CBM כולל ממושטַח</span><strong>{palletizedPhysicalCbm.toFixed(1)} CBM</strong><small>{palletizedCbmPct.toFixed(1)}% מנפח המכולה · כולל מעטפת המשטחים</small></div><p>אדום = חריגה מעל 100% · ירוק = 95%–100% · כתום = פחות מ־95%.</p></div>
       <div className="load-methods"><article className={recommendedMode==="palletized"?"best":""}><header><span>העמסה ממושטחת</span>{recommendedMode==="palletized"&&<b>קיבולת גבוהה יותר</b>}</header><strong>{palletScenario.loaded.toLocaleString()}</strong><small>קרטונים מרביים · {palletScenario.packed.length.toLocaleString()} משטחים · {palletPresetLabel}</small><p>{result.requested>palletScenario.loaded?`${(result.requested-palletScenario.loaded).toLocaleString()} קרטונים לא ייכנסו`:`אפשר להוסיף ${(palletScenario.loaded-result.requested).toLocaleString()} קרטונים`}</p><button onClick={()=>setSimulationMode("palletized")}>הציגי העמסה ממושטחת בהדמיה</button></article>
       <article className={recommendedMode==="loose"?"best":""}><header><span>העמסת Loose</span>{recommendedMode==="loose"&&<b>קיבולת גבוהה יותר</b>}</header><strong>{looseScenario.loaded.toLocaleString()}</strong><small>קרטונים מרביים ללא משטחים</small><p>{result.requested>looseScenario.loaded?`${(result.requested-looseScenario.loaded).toLocaleString()} קרטונים לא ייכנסו`:`אפשר להוסיף ${(looseScenario.loaded-result.requested).toLocaleString()} קרטונים`}</p><button onClick={()=>setSimulationMode("loose")}>הציגי העמסת Loose בהדמיה</button></article></div>
       <section className="smart-recommendations"><div className="smart-head"><div><span>מנוע המלצות</span><h3>מה אפשר לשפר בתרחיש?</h3></div><b>{containerType}</b></div>
-      {heightCandidate&&optimizedHeightCandidate&&stackHeightGain>0&&<article className="smart-card featured"><div className="smart-icon">↥</div><div><span>הזדמנות לקומה נוספת</span><strong>להפחית את גובה המשטח ל־{optimizedHeightCandidate.palletH.toFixed(0)} ס״מ</strong><p>מק״ט {heightCandidate.id}: מעבר מ־{heightCandidate.layers} ל־{optimizedHeightCandidate.layers} שכבות במשטח מאפשר שתי קומות ומוסיף עד {stackHeightGain.toLocaleString()} קרטונים לתרחיש.</p>{heightCandidate.estimated&&<small>המלצה משוערת — חלק ממידות הפריט הושלמו בנתוני דמה.</small>}<button onClick={()=>{setHeightOptimization(true);setSimulationMode("palletized")}}>חשבי והציגי את התרחיש</button></div></article>}
-      <article className="smart-card"><div className="smart-icon">⇄</div><div><span>השוואת שיטת העמסה</span><strong>{recommendedDifference?`${recommendedMode==="loose"?"Loose":"ממושטַח"} מוסיפה ${recommendedDifference.toLocaleString()} קרטונים`:"אין פער בין השיטות"}</strong><p>{recommendedCapacity?`הקיבולת הגבוהה ביותר כרגע היא ${recommendedCapacity.toLocaleString()} קרטונים.`:"בחרי פריטים וכמויות כדי לקבל המלצה."}</p></div></article>
+      {heightCandidate&&optimizedHeightCandidate&&stackHeightGain>0?<article className="smart-card featured"><div className="smart-icon">↥</div><div><span>בדיקת שכבות עליונות · נבדקת בכל תרחיש</span><strong>להפחית את גובה המשטח ל־{optimizedHeightCandidate.palletH.toFixed(0)} ס״מ</strong><p>מק״ט {heightCandidate.id}: התאמת המשטח מאפשרת שכבת משטחים נוספת ומוסיפה עד {stackHeightGain.toLocaleString()} קרטונים. הבדיקה נערכת גם כשבמקור הפריט הוגדר Loose.</p>{heightCandidate.estimated&&<small>המלצה משוערת — חלק ממידות הפריט הושלמו בנתוני דמה.</small>}<button onClick={()=>{setHeightOptimization(true);setSimulationMode("palletized")}}>הציגי את ההצעה בתרחיש</button></div></article>:<article className="smart-card warning"><div className="smart-icon">↥</div><div><span>בדיקת שכבות עליונות · נבדקת בכל תרחיש</span><strong>לא נמצאה תוספת בטוחה של שכבה עליונה</strong><p>נבדקו גובה המכולה, גובה המשטח, Stackable ומספר הקומות המרבי. הצעה תופיע כאשר נתוני הפריט מאפשרים תוספת מאומתת.</p></div></article>}
+      <article className="smart-card"><div className="smart-icon">⇄</div><div><span>השוואת שיטת העמסה</span><strong>{recommendedDifference?`${recommendedMode==="loose"?"Loose":"ממושטַח"} מוסיפה ${recommendedDifference.toLocaleString()} קרטונים`:"אין פער בין השיטות"}</strong><p>{recommendedCapacity?`הקיבולת הגבוהה ביותר כרגע היא ${recommendedCapacity.toLocaleString()} קרטונים.`:"בחרי פריטים וכמויות כדי לקבל המלצה."}</p>{recommendedMode!=="equal"&&<button onClick={()=>setSimulationMode(recommendedMode)}>הציגי את ההצעה בתרחיש</button>}</div></article>
       <article className="smart-card"><div className="smart-icon">↻</div><div><span>בדיקת סיבוב</span><strong>{Math.max(looseRotationGain,palletRotationGain)>0?`סיבוב מוסיף עד ${Math.max(looseRotationGain,palletRotationGain).toLocaleString()} קרטונים`:"לא נמצא רווח מסיבוב של 90°"}</strong><p>נבדקו בנפרד סיבוב קרטונים בתרחיש Loose וסיבוב משטחים בתרחיש ממושטַח.</p></div></article>
-      {mixedOpportunity&&<article className="smart-card mixed"><div className="smart-icon">◫</div><div><span>מבנה העמסה מעורב</span><strong>כדאי להשוות בין אזורי משטחים לאזורי Loose</strong><p>בתמהיל יש שיטות העמסה או מגבלות Stackable שונות. אפשר להשאיר פריטים רגישים על משטחים ולנצל אזורים פנויים עם פריטים חופשיים או משטחים נמוכים.</p><button onClick={()=>{setSimulationMode("database");setHeightOptimization(true)}}>חשבי תרחיש לפי נתוני הפריטים</button></div></article>}
+      <article className="smart-card mixed"><div className="smart-icon">◫</div><div><span>מבנה העמסה מעורב</span><strong>משטח ו־Loose באותו תרחיש</strong><p>כל שורה באזור התרחיש יכולה להיות משטח או Loose. הבחירה נשמרת ברמת שורת הטעינה, גם אם אותו מק״ט מופיע בכמה חלופות.</p><button onClick={()=>setSimulationMode("mixed")}>הציגי העמסה מעורבת בתרחיש</button></div></article>
       {estimatedItemsCount>0&&<article className="smart-card warning"><div className="smart-icon">!</div><div><span>איכות הנתונים</span><strong>{estimatedItemsCount} פריטים מבוססים חלקית על נתוני דמה</strong><p>המלצות גובה, קומה נוספת ו־CBM יהפכו מדויקות כאשר מידות הקרטון, המשטח והגובה הטעון יהיו מלאות בקובץ האמיתי.</p></div></article>}
       </section>
       <details className="calc-method" open><summary>איך מחושבת הקיבולת?</summary><ol><li>ב־Loose כל קרטון הוא יחידת העמסה. המערכת בודקת סיבוב על רצפת המכולה ומסדרת קרטונים בשורות ובשכבות.</li><li>בממושטַח יחידת ההעמסה היא משטח מלא. אם Stackable מסומן כן, נבדקות קומות נוספות לפי הגובה ומספר הקומות המרבי; אם לא, נשארים בקומה אחת.</li><li>מספר המשטחים מוכפל במספר הקרטונים למשטח. החישוב נעצר במגבלת המידות או המשקל — המגבלה הראשונה קובעת.</li></ol>{singleMixItem&&<div className="calc-example"><b>למה הפער גדול בפריט הזה?</b><p>משטח {singleMixItem.palletL}×{singleMixItem.palletW} ס״מ, בגובה {singleMixItem.palletH} ס״מ, מכיל {singleMixItem.cartonsPerPallet} קרטונים ומוגדר {singleMixItem.stackable?"Stackable":"לא ניתן לערימה"}. במכולה נכנסים {palletScenario.packed.length} משטחים — כלומר {palletScenario.loaded.toLocaleString()} קרטונים. ב־Loose המקסימום המחושב הוא {looseScenario.loaded.toLocaleString()} קרטונים{looseVsPalletRatio>1?` — פי ${looseVsPalletRatio.toFixed(2)} מהתרחיש הממושטַח.`:"."}</p></div>}</details>
-      {simulationMode!=="database"&&<button className="reset-method" onClick={()=>setSimulationMode("database")}>הציגי שוב את שיטות ההעמסה שמוגדרות בקובץ</button>}</aside>
+      {simulationMode!=="mixed"&&<button className="reset-method" onClick={()=>setSimulationMode("mixed")}>חזרי לשיטות ההעמסה של כל שורת תרחיש</button>}</aside>
     </section>
-    <section className="items card"><div className="section-head"><div><h2>פריטים בסימולציה</h2><p>{items.length} פריטים במאגר · הנתונים נשמרים בדפדפן שלך</p></div><button className="ghost" onClick={()=>setSelected(selected.length?[]:items.map(x=>x.id))}>{selected.length?"נקה בחירה":"בחר הכול"}</button></div><div className="table-wrap"><table><thead><tr><th></th><th>מק״ט ותיאור</th><th>ספק</th><th>שיטת העמסה</th><th>מידות קרטון</th><th>מידות משטח וגובה</th><th>קרטונים/משטח</th><th>Stackable</th><th>מקס׳ קומות</th><th>כמות לסימולציה</th><th>איכות נתון</th></tr></thead><tbody>{items.filter(i=>supplier==="הכול"||i.supplier===supplier).slice(0,80).map(item=><tr key={item.id}><td><input type="checkbox" checked={selected.includes(item.id)} onChange={()=>setSelected(v=>v.includes(item.id)?v.filter(x=>x!==item.id):[...v,item.id])}/></td><td><b>{item.id}</b><small>{item.description}</small></td><td>{item.supplier}</td><td><span className={item.loadType==="Palletized"?"pill blue":"pill amber"}>{item.loadType==="Palletized"?"ממושטַח":"קרטונים חופשיים"}</span></td><td>{item.l}×{item.w}×{item.h}</td><td>{item.palletL}×{item.palletW}×{item.palletH}</td><td>{item.cartonsPerPallet}</td><td><span className={item.stackable?"pill green":"pill amber"}>{item.stackable?"כן":"לא"}</span></td><td>{item.maxStackLayers||"לפי גובה"}</td><td><input className="qty" type="number" value={item.qty} onChange={e=>updateQty(item.id,Number(e.target.value))}/></td><td><span className={item.estimated?"pill amber":"pill green"}>{item.estimated?"משוער":"מלא"}</span></td></tr>)}</tbody></table></div></section></>}
+    <section className="items card"><div className="section-head"><div><h2>פריטים זמינים להוספה לתרחיש</h2><p>{items.length} שורות טעינה במאגר · {scenario.length} שורות בתרחיש הפעיל · הנתונים נשמרים בדפדפן שלך</p></div><button className="ghost" onClick={()=>scenario.length?setScenario([]):addVisibleToScenario()}>{scenario.length?"נקה תרחיש":"הוסיפי את הפריטים המוצגים"}</button></div><div className="table-wrap"><table><thead><tr><th>לתרחיש</th><th>מק״ט ותיאור</th><th>ספק</th><th>שיטת העמסה במקור</th><th>מידות קרטון</th><th>מידות משטח וגובה</th><th>קרטונים/משטח</th><th>Stackable</th><th>מקס׳ קומות</th><th>כמות מקור</th><th>איכות נתון</th></tr></thead><tbody>{items.filter(i=>supplier==="הכול"||i.supplier===supplier).slice(0,80).map(item=><tr key={item.rowId}><td><input type="checkbox" checked={scenario.some(entry=>entry.rowId===item.rowId)} onChange={()=>toggleScenario(item)} aria-label={`הוספת ${item.id} לתרחיש`}/></td><td><b>{item.id}</b><small>{item.description}</small></td><td>{item.supplier}</td><td><span className={item.loadType==="Palletized"?"pill blue":"pill amber"}>{item.loadType==="Palletized"?"ממושטַח":"קרטונים חופשיים"}</span></td><td>{item.l}×{item.w}×{item.h}</td><td>{item.palletL}×{item.palletW}×{item.palletH}</td><td>{item.cartonsPerPallet}</td><td><span className={item.stackable?"pill green":"pill amber"}>{item.stackable?"כן":"לא"}</span></td><td>{item.maxStackLayers||"לפי גובה"}</td><td><input className="qty" type="number" value={item.qty} onChange={e=>updateSourceQty(item.rowId,Number(e.target.value))}/></td><td><span className={item.estimated?"pill amber":"pill green"}>{item.estimated?"משוער":"מלא"}</span></td></tr>)}</tbody></table></div></section></>}
   </main>;
 }
