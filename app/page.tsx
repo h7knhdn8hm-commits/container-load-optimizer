@@ -4,6 +4,7 @@ import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type LoadType = "Palletized" | "Loose";
 type PalletPreset = "database" | "euro" | "industrial" | "gma" | "halfEuro";
+type ContainerKey = "40HC_DRY" | "40HC_REEFER" | "20RF";
 type ImportStatus = { kind: "idle" | "loading" | "success" | "error"; message: string };
 type Item = {
   /** Internal, row-level identity. Never use the SKU as a React or scenario key. */
@@ -15,15 +16,15 @@ type Item = {
   loadingPriority?: number; remarks?: string; canMixSkusOnPallet?: boolean;
   stackable?: boolean; maxStackLayers?: number; maxStackWeightKg?: number;
   cartonRotatable?: boolean; mustStayUpright?: boolean; estimated?: boolean;
+  containerKeys?: ContainerKey[]; containerTypeText?: string; seasonalContainerKeys?: ContainerKey[];
 };
 type ScenarioEntry = { rowId: string; qty: number; loadType: LoadType };
 
 const containers = {
-  "20FT": { l: 589, w: 235, h: 239, maxKg: 28000 },
-  "40FT": { l: 1203, w: 235, h: 239, maxKg: 26500 },
-  "40HC": { l: 1203, w: 235, h: 269, maxKg: 26500 },
-  "40RF": { l: 1158, w: 228, h: 243, maxKg: 28200 },
-};
+  "40HC_DRY": { label: "40' HC Dry", l: 1203, w: 235, h: 269, maxKg: 27000 },
+  "40HC_REEFER": { label: "40' HC Reefer", l: 1158, w: 228, h: 243, maxKg: 29000 },
+  "20RF": { label: "20' Reefer", l: 544, w: 228, h: 226, maxKg: 27000 },
+} as const;
 
 const demoItems: Item[] = [
   { rowId:"demo-1",id:"0310118", description:"מיני מנטוס 150 יח׳ בצילינדר", supplier:"VAN MELLE", loadType:"Palletized", qty:336, l:40,w:30,h:25,weight:9.45,cartonsPerPallet:24,cartonsPerLayer:4,layers:6,palletL:120,palletW:100,palletH:165 },
@@ -44,7 +45,7 @@ function effectiveCartonsPerPallet(item:Item, cartonScale:number){
   return scaledPerLayer*layers;
 }
 
-function pack(items: Item[], c: typeof containers["40HC"], cartonScale = 1) {
+function pack(items: Item[], c: typeof containers[ContainerKey], cartonScale = 1) {
   const packed: Packed[] = [];
   let x=0,y=0,z=0,rowDepth=0,layerHeight=0,totalKg=0,requested=0,loaded=0;
   requested=items.reduce((sum,item)=>sum+item.qty,0);
@@ -68,7 +69,7 @@ function pack(items: Item[], c: typeof containers["40HC"], cartonScale = 1) {
   return {packed,totalKg,requested,loaded,volumePct:usedVol/(c.l*c.w*c.h)*100,weightPct:totalKg/c.maxKg*100};
 }
 
-function capacityForMix(items:Item[],c:typeof containers["40HC"],cartonScale=1){
+function capacityForMix(items:Item[],c:typeof containers[ContainerKey],cartonScale=1){
   const active=items.filter(item=>item.qty>0);
   const requested=active.reduce((sum,item)=>sum+item.qty,0);
   if(!requested)return pack([],c,cartonScale);
@@ -76,7 +77,7 @@ function capacityForMix(items:Item[],c:typeof containers["40HC"],cartonScale=1){
   return pack(active.map(item=>({...item,qty:item.qty*factor})),c,cartonScale);
 }
 
-function singleCapacity(item: Item, c: typeof containers["40HC"], palletized: boolean) {
+function singleCapacity(item: Item, c: typeof containers[ContainerKey], palletized: boolean) {
   const palletTiers=palletized?(item.palletH>c.h?0:item.stackable?Math.min(Math.floor(c.h/item.palletH),item.maxStackLayers||99):1):1;
   const options = palletized
     ? [[item.palletL,item.palletW,item.palletH],[item.palletW,item.palletL,item.palletH]]
@@ -86,10 +87,10 @@ function singleCapacity(item: Item, c: typeof containers["40HC"], palletized: bo
   const units=palletized?item.cartonsPerPallet:1;
   const byWeight=Math.floor(c.maxKg/(item.weight*units+(palletized?(item.palletBaseWeight||0):0)));
   const maxLoads=Math.min(geometric,byWeight);
-  return {maximum:maxLoads*units,recommended:Math.floor(maxLoads*.94)*units,loads:maxLoads,weightLimited:byWeight<geometric};
+  return {maximum:maxLoads*units,recommended:maxLoads*units,loads:maxLoads,weightLimited:byWeight<geometric};
 }
 
-function optimizePalletHeightForExtraTier(item:Item,c:typeof containers["40HC"]){
+function optimizePalletHeightForExtraTier(item:Item,c:typeof containers[ContainerKey]){
   if(item.loadType!=="Palletized"||!item.stackable||(item.maxStackLayers||2)<2||item.palletH<=c.h/2)return item;
   const palletBaseH=Math.max(8,item.palletBaseH||15),targetHeight=c.h/2;
   const layers=Math.max(1,Math.floor((targetHeight-palletBaseH)/Math.max(1,item.h)));
@@ -130,6 +131,21 @@ function parseNumber(v:unknown){
   return Number.isFinite(parsed)?parsed:undefined;
 }
 
+function containerKeysFromText(value:unknown): ContainerKey[]{
+  const text=String(value??"").toLowerCase();
+  const keys:ContainerKey[]=[];
+  if(/20\s*(?:ft|')?\s*(?:hc\s*)?(?:reefer|rf)/.test(text))keys.push("20RF");
+  if(/40\s*(?:ft|')?\s*(?:hc|high\s*cube)?\s*(?:reefer|rf)/.test(text))keys.push("40HC_REEFER");
+  if(/40\s*(?:ft|')?\s*(?:hc|high\s*cube)?\s*dry/.test(text))keys.push("40HC_DRY");
+  return Array.from(new Set(keys));
+}
+
+function allowedContainersFor(items:Item[]): ContainerKey[]{
+  const constraints=items.map(item=>Array.from(new Set([...(item.containerKeys||[]),...(item.seasonalContainerKeys||[])]))).filter(keys=>keys.length);
+  if(!constraints.length)return [];
+  return (Object.keys(containers) as ContainerKey[]).filter(key=>constraints.every(keys=>keys.includes(key)));
+}
+
 function rowsToItems(rows: Record<string,unknown>[]) {
   const n=(v:unknown,f:number)=>parseNumber(v)??f;
   const optionalNumber=(v:unknown)=>parseNumber(v);
@@ -152,7 +168,8 @@ function rowsToItems(rows: Record<string,unknown>[]) {
   let lastSupplier="ספק לא מוגדר";
   return rows.slice(0,1000).reduce<Item[]>((items,r,idx)=>{
     if(/^ex\.?$/i.test(String(value(r,"No.","No")||"").trim()))return items;
-    const itemNumber=value(r,"ItemNumber","Item Number","Item No","SKU","מק״ט");
+    const supplierItemNumberValue=value(r,"SupplierItemNumber","Supplier's Item number","Suppllier's Item number","Suplier's Item number");
+    const itemNumber=value(r,"ItemNumber","Item Number","Item No","SKU","מק״ט")??supplierItemNumberValue;
     if(itemNumber===undefined)return items;
     const supplierValue=value(r,"Supplier","Suplier","Suppllier","Supllier","ספק");
     if(supplierValue!==undefined)lastSupplier=supplierName(supplierValue);
@@ -167,12 +184,16 @@ function rowsToItems(rows: Record<string,unknown>[]) {
     const palletWidth=value(r,"PalletWidthCm","Pallet Width (cm)","Pallet Width\n(cm)");
     const palletBaseHeight=value(r,"PalletHeightCm","Pallet Height empty (cm)","Pallet Height\nempty (cm)");
     const loadedPalletHeight=value(r,"LoadedPalletHeightCm","Loaded Pallet Height (cm)","Loaded Pallet\nHeight (cm)");
+    const containerTypeText=String(value(r,"ContainerType","Container Type")??"").trim()||undefined;
+    const remarksValue=value(r,"Remarks","Notes / Comments","Notes /\nComments");
+    const remarks=remarksValue===undefined?undefined:String(remarksValue);
+    const seasonalText=/also\s+ships\s+(.+)/i.exec(remarks||"")?.[1]||"";
     const item:Item={
       rowId:`row-${idx + 1}-${String(itemNumber||`ITEM-${idx+1}`).trim()}`,
       id:String(itemNumber||`ITEM-${idx+1}`).trim(),
       description:String(value(r,"ItemDescription","Item Description","ENG","Supplier's Item description","Suppllier's Item description")||"פריט ללא תיאור"),
       supplier:lastSupplier,
-      supplierItemNumber:value(r,"SupplierItemNumber","Supplier's Item number","Suppllier's Item number","Suplier's Item number")===undefined?undefined:String(value(r,"SupplierItemNumber","Supplier's Item number","Suppllier's Item number","Suplier's Item number")),
+      supplierItemNumber:supplierItemNumberValue===undefined?undefined:String(supplierItemNumberValue),
       supplierDescription:value(r,"SupplierDescription","Supplier's Item description","Suppllier's Item description","Suplier's Item description")===undefined?undefined:String(value(r,"SupplierDescription","Supplier's Item description","Suppllier's Item description","Suplier's Item description")),
       loadType:String(value(r,"LoadType","Load Type")||"").toLowerCase().includes("pallet")?"Palletized":"Loose",
       qty:n(value(r,"Quantity"),n(cartonsPerPallet,60)*8),
@@ -189,7 +210,10 @@ function rowsToItems(rows: Record<string,unknown>[]) {
       mustStayUpright:yes(value(r,"MustStayUpright","Must Stay Upright?","Must Stay\nUpright?"),true),
       canMixSkusOnPallet:yes(value(r,"CanMixSKUsOnPallet","Can Mix SKUs On Pallet?"),false),
       loadingPriority:optionalNumber(value(r,"LoadingPriority","Loading Priority","Loading\nPriority")),
-      remarks:value(r,"Remarks","Notes / Comments","Notes /\nComments")===undefined?undefined:String(value(r,"Remarks","Notes / Comments","Notes /\nComments")),
+      remarks,
+      containerTypeText,
+      containerKeys:containerKeysFromText(containerTypeText),
+      seasonalContainerKeys:containerKeysFromText(seasonalText),
       estimated:![cartonLength,cartonWidth,cartonHeight,palletLength,palletWidth,loadedPalletHeight].every(v=>v!==undefined&&v!==null&&v!=="")
     };
     items.push(item);
@@ -223,12 +247,12 @@ export function workbookToItems(XLSX:typeof import("xlsx"),workbook:import("xlsx
 }
 
 function applyPalletPreset(item:Item,preset:PalletPreset){
-  if(preset==="database")return item;
+  if(preset==="database"&&item.loadType==="Palletized")return item;
   const [palletL,palletW]=preset==="euro"?[120,80]:preset==="halfEuro"?[80,60]:preset==="gma"?[122,102]:[120,100];
-  const baseArea=Math.max(1,item.palletL*item.palletW);
-  const areaRatio=palletL*palletW/baseArea;
-  const cartonsPerLayer=Math.max(1,Math.floor(item.cartonsPerLayer*areaRatio));
-  return {...item,palletL,palletW,cartonsPerLayer,cartonsPerPallet:cartonsPerLayer*Math.max(1,item.layers)};
+  const orientations=item.cartonRotatable===false?[[item.l,item.w]]:[[item.l,item.w],[item.w,item.l]];
+  const cartonsPerLayer=Math.max(1,...orientations.map(([l,w])=>Math.floor(palletL/Math.max(1,l))*Math.floor(palletW/Math.max(1,w))));
+  const layers=Math.max(1,item.layers||1);
+  return {...item,loadType:"Palletized" as LoadType,palletL,palletW,cartonsPerLayer,layers,cartonsPerPallet:cartonsPerLayer*layers,palletH:Math.max(item.palletBaseH||15,(item.palletBaseH||15)+layers*item.h)};
 }
 
 function ensureRowIds(raw: Item[]){
@@ -241,7 +265,7 @@ function ensureRowIds(raw: Item[]){
   });
 }
 
-function ContainerCanvas({result, mode, container, colorById}:{result:ReturnType<typeof pack>;mode:"2d"|"3d";container:typeof containers["40HC"];colorById:Map<string,string>}){
+function ContainerCanvas({result, mode, container, colorById}:{result:ReturnType<typeof pack>;mode:"2d"|"3d";container:typeof containers[ContainerKey];colorById:Map<string,string>}){
   const ref=useRef<HTMLCanvasElement>(null);
   const drag=useRef<{x:number;y:number;yaw:number;pitch:number}|null>(null);
   const [view,setView]=useState({yaw:-0.42,pitch:0.38,zoom:1});
@@ -271,10 +295,10 @@ function ContainerCanvas({result, mode, container, colorById}:{result:ReturnType
 export default function Home(){
   const [items,setItems]=useState<Item[]>(demoItems);
   const [scenario,setScenario]=useState<ScenarioEntry[]>(demoItems.map(item=>({rowId:item.rowId,qty:item.qty,loadType:item.loadType})));
-  const [containerType,setContainerType]=useState<keyof typeof containers>("40HC");
+  const [containerType,setContainerType]=useState<ContainerKey>("40HC_DRY");
   const [supplier,setSupplier]=useState("הכול");
   const [tab,setTab]=useState<"2d"|"3d">("3d");
-  const [fileName,setFileName]=useState("LOADING_METHOD.xlsx");
+  const [fileName,setFileName]=useState("Consolidated_Supplier_Item_Loading_Data_12.xlsx");
   const [importStatus,setImportStatus]=useState<ImportStatus>({kind:"idle",message:""});
   const [hydrated,setHydrated]=useState(false);
   const userImportRef=useRef(false);
@@ -289,6 +313,7 @@ export default function Home(){
     const item=itemByRowId.get(entry.rowId);
     return item?[{...item,qty:entry.qty,loadType:entry.loadType}]:[];
   }),[scenario,itemByRowId]);
+  const allowedContainerKeys=useMemo(()=>allowedContainersFor(visible),[visible]);
   const simulationItems=useMemo(()=>visible.map(item=>{
     const withMode=simulationMode==="mixed"?item:{...item,loadType:simulationMode==="palletized"?"Palletized" as LoadType:"Loose" as LoadType};
     const prepared=withMode.loadType==="Palletized"?applyPalletPreset(withMode,palletPreset):withMode;
@@ -353,23 +378,26 @@ export default function Home(){
         if(active)setScenario(restored);
       }catch{}
     };
-    const saved=localStorage.getItem("container-suppliers-v5");
+    const saved=localStorage.getItem("container-suppliers-v7");
     if(saved){
       try{
         const parsed=ensureRowIds((JSON.parse(saved) as Item[]).map(item=>({...item,supplier:item.supplier==="LI}TON"?"LIPTON":item.supplier})));
         if(Array.isArray(parsed)&&parsed.length&&active&&!userImportRef.current){
-          const savedFileName=localStorage.getItem("container-file-name-v1")||"הקובץ השמור";
-          setItems(parsed);setFocusId(parsed[0].rowId);setFileName(savedFileName);setImportStatus({kind:"success",message:`שמורות ${parsed.length} שורות טעינה`});restoreScenario(parsed);setHydrated(true);return;
+          const savedFileName=localStorage.getItem("container-file-name-v3")||"הקובץ השמור";
+          const initialScenario=parsed.slice(0,7).map(item=>({rowId:item.rowId,qty:item.qty,loadType:item.loadType}));
+          const initialContainers=allowedContainersFor(initialScenario.map(entry=>parsed.find(item=>item.rowId===entry.rowId)!).filter(Boolean));
+          setItems(parsed);setScenario(initialScenario);setFocusId(parsed[0].rowId);if(initialContainers[0])setContainerType(initialContainers[0]);setFileName(savedFileName);setImportStatus({kind:"success",message:`שמורות ${parsed.length} שורות טעינה`});restoreScenario(parsed);setHydrated(true);return;
         }
       }catch{}
     }
     try{
-      const XLSX=await import("xlsx");const response=await fetch("assets/loading-demo.xlsx");const wb=XLSX.read(await response.arrayBuffer());const parsed=ensureRowIds(workbookToItems(XLSX,wb));
-      if(active&&!userImportRef.current&&parsed.length){setItems(parsed);setScenario(parsed.map(item=>({rowId:item.rowId,qty:item.qty,loadType:item.loadType})));setFocusId(parsed[0].rowId);setHydrated(true);localStorage.setItem("container-suppliers-v5",JSON.stringify(parsed));}
+      const XLSX=await import("xlsx");const response=await fetch("assets/consolidated-supplier-item-loading-data-12.xlsx");const wb=XLSX.read(await response.arrayBuffer());const parsed=ensureRowIds(workbookToItems(XLSX,wb));
+      if(active&&!userImportRef.current&&parsed.length){const initialScenario=parsed.slice(0,7).map(item=>({rowId:item.rowId,qty:item.qty,loadType:item.loadType}));const initialContainers=allowedContainersFor(initialScenario.map(entry=>parsed.find(item=>item.rowId===entry.rowId)!).filter(Boolean));setItems(parsed);setScenario(initialScenario);setFocusId(parsed[0].rowId);if(initialContainers[0])setContainerType(initialContainers[0]);setFileName("Consolidated_Supplier_Item_Loading_Data_12.xlsx");setHydrated(true);localStorage.setItem("container-suppliers-v7",JSON.stringify(parsed));localStorage.setItem("container-file-name-v3","Consolidated_Supplier_Item_Loading_Data_12.xlsx");}
     }catch{if(active&&!userImportRef.current)setHydrated(true)}
   })();return()=>{active=false}},[]);
-  useEffect(()=>{if(hydrated)localStorage.setItem("container-suppliers-v5",JSON.stringify(items))},[items,hydrated]);
+  useEffect(()=>{if(hydrated)localStorage.setItem("container-suppliers-v7",JSON.stringify(items))},[items,hydrated]);
   useEffect(()=>{if(hydrated)localStorage.setItem("container-active-scenario-v1",JSON.stringify(scenario))},[scenario,hydrated]);
+  useEffect(()=>{if(allowedContainerKeys.length&&!allowedContainerKeys.includes(containerType))setContainerType(allowedContainerKeys[0])},[allowedContainerKeys,containerType]);
   const importFile=async(e:ChangeEvent<HTMLInputElement>)=>{
     const input=e.currentTarget,file=input.files?.[0];if(!file)return;
     userImportRef.current=true;setImportStatus({kind:"loading",message:"קוראת את הקובץ…"});
@@ -379,8 +407,10 @@ export default function Home(){
       const mapped=ensureRowIds(workbookToItems(XLSX,wb));
       if(!mapped.length)throw new Error("לא נמצאו שורות פריטים בפורמט הנתמך");
       const supplierNames=Array.from(new Set(mapped.map(item=>item.supplier))).filter(name=>name!=="ספק לא מוגדר");
-      setItems(mapped);setScenario([]);setSupplier("הכול");setFocusId(mapped[0].rowId);setFileName(file.name);setHydrated(true);
-      localStorage.setItem("container-suppliers-v5",JSON.stringify(mapped));localStorage.setItem("container-file-name-v1",file.name);
+      const initialScenario=mapped.slice(0,7).map(item=>({rowId:item.rowId,qty:item.qty,loadType:item.loadType}));
+      const initialContainers=allowedContainersFor(initialScenario.map(entry=>mapped.find(item=>item.rowId===entry.rowId)!).filter(Boolean));
+      setItems(mapped);setScenario(initialScenario);setSupplier("הכול");setFocusId(mapped[0].rowId);if(initialContainers[0])setContainerType(initialContainers[0]);setFileName(file.name);setHydrated(true);
+      localStorage.setItem("container-suppliers-v7",JSON.stringify(mapped));localStorage.setItem("container-file-name-v3",file.name);
       setImportStatus({kind:"success",message:`נקלטו ${mapped.length} שורות טעינה${supplierNames.length?` · ${supplierNames.join(", ")}`:""}`});
     }catch(error){
       const message=error instanceof Error?error.message:"לא ניתן לקרוא את הקובץ";
@@ -398,6 +428,7 @@ export default function Home(){
     return [...current,...additions];
   });
   const focus=items.find(x=>x.rowId===focusId)||items[0];
+  const focusContainerKeys=focus?allowedContainersFor([focus]):[];
   const legendItems=Array.from(new Map(result.packed.map(p=>[p.item.rowId,p.item])).values()).slice(0,7);
   const colorById=useMemo(()=>{
     const map=new Map<string,string>();
@@ -412,9 +443,9 @@ export default function Home(){
   return <main dir="rtl">
     <header className="topbar"><div className="brand"><img src="assets/ls-logo.png" alt="ליימן שליסל"/><div><div className="eyebrow">LOADWISE · כלי תכנון יבוא</div><h1>סימולטור העמסה</h1></div></div><label className="upload"><span>＋</span><span><b>ייבוא Excel / CSV</b><small>{fileName}</small>{importStatus.kind!=="idle"&&<em className={`import-status ${importStatus.kind}`} role="status">{importStatus.message}</em>}</span><input type="file" accept=".xlsx,.xls,.csv" onChange={importFile}/></label></header>
     <nav className="mode-switch"><button className={workMode==="mixed"?"active":""} onClick={()=>setWorkMode("mixed")}><b>סימולטור העמסה</b><small>בניית תרחיש מעורב של משטחים ו־Loose</small></button><button className={workMode==="single"?"active":""} onClick={()=>setWorkMode("single")}><b>יכולת העמסה לפריט</b><small>מקסימום ומומלץ לכל מק״ט</small></button></nav>
-    <section className="controls card"><label>ספק<select value={supplier} onChange={e=>changeSupplier(e.target.value)}>{suppliers.map(s=><option key={s}>{s}</option>)}</select></label><label>מכולה לסימולציה<select value={containerType} onChange={e=>setContainerType(e.target.value as keyof typeof containers)}>{Object.keys(containers).map(s=><option key={s} value={s}>{s==="40RF"?"40RF · Reefer":s}</option>)}</select></label>{workMode==="mixed"&&<label>שיטת העמסה בסימולציה<select value={simulationMode} onChange={e=>setSimulationMode(e.target.value as "mixed"|"palletized"|"loose")}><option value="mixed">העמסה מעורבת · משטח + Loose לפי שורה</option><option value="palletized">הכול על משטחים</option><option value="loose">הכול ללא משטחים · Loose</option></select></label>}{workMode==="mixed"&&<label>סוג משטח<select value={palletPreset} onChange={e=>setPalletPreset(e.target.value as PalletPreset)}><option value="database">לפי מידות המשטח בקובץ</option><option value="euro">Euro · 120×80</option><option value="industrial">ISO / תעשייתי · 120×100</option><option value="gma">GMA · 122×102</option><option value="halfEuro">חצי Euro · 80×60</option></select></label>}{workMode==="mixed"&&<label>בדיקת שכבות עליונות<select value={heightOptimization?"optimized":"original"} onChange={e=>setHeightOptimization(e.target.value==="optimized")}><option value="original">ללא התאמת גובה</option><option value="optimized">בדקי התאמה לקומה נוספת</option></select></label>}{workMode==="mixed"&&<p className="control-guidance"><b>מה נבדק כאן?</b> האם התאמת גובה המשטח מאפשרת שכבת משטחים נוספת בחלק העליון של המכולה, ורק לפריטים שמסומנים Stackable ובמסגרת מגבלות הגובה והמשקל.</p>}</section>
-    {workMode==="mixed"&&<section className={`container-summary card ${cbmDemandPct>100||weightDemandPct>100||weightIsLimiting?"over":""}`}><div className="container-capacity"><span>קיבולת המכולה הנבחרת</span><strong>{containerCbm.toFixed(1)} <small>CBM</small></strong><b>{containerType==="40RF"?"40RF · Reefer":containerType}</b></div><div className="container-facts"><div><span>מידות פנימיות</span><b>{c.l} × {c.w} × {c.h} ס״מ</b></div><div><span>משקל מטען מרבי לפי הציוד</span><b>{c.maxKg.toLocaleString()} ק״ג</b></div><div className={weightDemandPct>100||weightIsLimiting?"fact-alert":""}><span>משקל המטען שבחרת</span><b>{plannedWeightKg.toLocaleString()} ק״ג · {weightDemandPct.toFixed(1)}%</b>{(weightDemandPct>100||weightIsLimiting)&&<small>לא ניתן למלא את המכולה מעבר לנקודה זו עקב מגבלת משקל</small>}</div></div><p>CBM הוא נפח תיאורטי. הקיבולת המעשית מחושבת גם לפי מידות הקרטונים, המשטחים, צורת הסידור והמשקל. יש לאמת מגבלות כביש ונמל לפי מדינת היעד.</p></section>}
-    {workMode==="single"&&focus&&<section className="single card"><div className="single-picker"><label>בחרי פריט לבדיקה<select value={focus.rowId} onChange={e=>setFocusId(e.target.value)}>{items.filter(i=>supplier==="הכול"||i.supplier===supplier).map(i=><option key={i.rowId} value={i.rowId}>{i.id} · {i.description}</option>)}</select></label><div><span>ספק</span><b>{focus.supplier}</b></div><div><span>מידות קרטון</span><b>{focus.l}×{focus.w}×{focus.h} ס״מ</b></div><div><span>משקל קרטון</span><b>{focus.weight} ק״ג</b></div></div><div className="capacity-grid">{Object.entries(containers).map(([name,cont])=>{const loose=singleCapacity(focus,cont,false),pal=singleCapacity(focus,cont,true);return <article key={name}><h3>{name}</h3><div className="capacity-row"><span>קרטונים חופשיים</span><b>{loose.maximum.toLocaleString()}</b><small>מקסימום</small><strong>{loose.recommended.toLocaleString()}</strong><small>מומלץ</small><em>{loose.weightLimited?"מוגבל משקל":"מוגבל נפח"}</em></div><div className="capacity-row"><span>העמסה ממושטחת</span><b>{pal.maximum.toLocaleString()}</b><small>מקסימום</small><strong>{pal.recommended.toLocaleString()}</strong><small>מומלץ</small><em>{pal.loads.toLocaleString()} משטחים · {pal.weightLimited?"מוגבל משקל":"מוגבל נפח"}</em></div></article>})}</div><p className="method-note">הכמות המקסימלית היא גבול גאומטרי/משקלי. הכמות המומלצת מחושבת ב־94% מהקיבולת ומשאירה מרווח תפעולי לפתחים, סטיות מידות ואבטחת מטען.</p></section>}
+    <section className="controls card"><label>ספק<select value={supplier} onChange={e=>changeSupplier(e.target.value)}>{suppliers.map(s=><option key={s}>{s}</option>)}</select></label><label>מכולה לסימולציה<select value={containerType} disabled={!allowedContainerKeys.length} onChange={e=>setContainerType(e.target.value as ContainerKey)}>{allowedContainerKeys.map(key=><option key={key} value={key}>{containers[key].label}</option>)}</select>{visible.length>0&&!allowedContainerKeys.length&&<small>בחרי פריטים בעלי מכולה משותפת המוגדרת בקובץ.</small>}</label>{workMode==="mixed"&&<label>שיטת העמסה בסימולציה<select value={simulationMode} onChange={e=>setSimulationMode(e.target.value as "mixed"|"palletized"|"loose")}><option value="mixed">העמסה מעורבת · משטח + Loose לפי שורה</option><option value="palletized">הכול על משטחים</option><option value="loose">הכול ללא משטחים · Loose</option></select></label>}{workMode==="mixed"&&<label>סוג משטח<select value={palletPreset} onChange={e=>setPalletPreset(e.target.value as PalletPreset)}><option value="database">לפי מידות המשטח בקובץ</option><option value="euro">Euro · 120×80</option><option value="industrial">ISO / תעשייתי · 120×100</option><option value="gma">GMA · 122×102</option><option value="halfEuro">חצי Euro · 80×60</option></select></label>}{workMode==="mixed"&&<label>בדיקת שכבות עליונות<select value={heightOptimization?"optimized":"original"} onChange={e=>setHeightOptimization(e.target.value==="optimized")}><option value="original">ללא התאמת גובה</option><option value="optimized">בדקי התאמה לקומה נוספת</option></select></label>}{workMode==="mixed"&&<p className="control-guidance"><b>מה נבדק כאן?</b> האם התאמת גובה המשטח מאפשרת שכבת משטחים נוספת בחלק העליון של המכולה, ורק לפריטים שמסומנים Stackable ובמסגרת מגבלות הגובה והמשקל.</p>}</section>
+    {workMode==="mixed"&&<section className={`container-summary card ${cbmDemandPct>100||weightDemandPct>100||weightIsLimiting?"over":""}`}><div className="container-capacity"><span>קיבולת המכולה הנבחרת</span><strong>{containerCbm.toFixed(1)} <small>CBM</small></strong><b>{c.label}</b></div><div className="container-facts"><div><span>מידות פנימיות</span><b>{c.l} × {c.w} × {c.h} ס״מ</b></div><div><span>משקל מטען מרבי לפי הציוד</span><b>{c.maxKg.toLocaleString()} ק״ג</b></div><div className={weightDemandPct>100||weightIsLimiting?"fact-alert":""}><span>משקל המטען שבחרת</span><b>{plannedWeightKg.toLocaleString()} ק״ג · {weightDemandPct.toFixed(1)}%</b>{(weightDemandPct>100||weightIsLimiting)&&<small>לא ניתן למלא את המכולה מעבר לנקודה זו עקב מגבלת משקל</small>}</div></div><p>CBM הוא נפח תיאורטי. הקיבולת המעשית מחושבת גם לפי מידות הקרטונים, המשטחים, צורת הסידור והמשקל. יש לאמת מגבלות כביש ונמל לפי מדינת היעד.</p></section>}
+    {workMode==="single"&&focus&&<section className="single card"><div className="single-picker"><label>בחרי פריט לבדיקה<select value={focus.rowId} onChange={e=>setFocusId(e.target.value)}>{items.filter(i=>supplier==="הכול"||i.supplier===supplier).map(i=><option key={i.rowId} value={i.rowId}>{i.id} · {i.description}</option>)}</select></label><div><span>ספק</span><b>{focus.supplier}</b></div><div><span>מידות קרטון</span><b>{focus.l}×{focus.w}×{focus.h} ס״מ</b></div><div><span>משקל קרטון</span><b>{focus.weight} ק״ג</b></div></div><div className="capacity-grid">{focusContainerKeys.map(name=>{const cont=containers[name];const loose=singleCapacity(focus,cont,false),pal=singleCapacity(focus,cont,true);return <article key={name}><h3>{cont.label}</h3><div className="capacity-row"><span>קרטונים חופשיים</span><b>{loose.maximum.toLocaleString()}</b><small>מקסימום מחושב</small><strong>{loose.recommended.toLocaleString()}</strong><small>ללא תקרת ניצולת מלאכותית</small><em>{loose.weightLimited?"מוגבל משקל":"מוגבל נפח"}</em></div><div className="capacity-row"><span>העמסה ממושטחת</span><b>{pal.maximum.toLocaleString()}</b><small>מקסימום מחושב</small><strong>{pal.recommended.toLocaleString()}</strong><small>ללא תקרת ניצולת מלאכותית</small><em>{pal.loads.toLocaleString()} משטחים · {pal.weightLimited?"מוגבל משקל":"מוגבל נפח"}</em></div></article>})}</div><p className="method-note">הקיבולת נקבעת רק לפי המידות והמשקל של המכולה ושל הפריט; אין אחוז מילוי קבוע שמקטין את התוצאה.</p></section>}
     {workMode==="mixed"&&<>
     <section className="kpis">
       <article><span>כמות שבחרת להעמיס</span><strong>{result.requested.toLocaleString()}</strong><small>קרטונים בתמהיל הנוכחי</small></article>
